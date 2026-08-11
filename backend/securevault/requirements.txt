@@ -27,10 +27,22 @@ GitPython==3.1.43
 # ── Security scanning tools ───────────────────────────────────────────────────
 pip-audit==2.7.3                # Python dependency vulnerability scanner
 
-# ── Cloud SDKs (Objective 1 scaffold — install as needed) ────────────────────
-# boto3==1.34.119               # AWS
-# azure-storage-blob==12.20.0   # Azure
-# google-cloud-storage==2.17.0  # GCP
+# ── Encryption ────────────────────────────────────────────────────────────────
+cryptography==44.0.3
+
+# ── AI & ML ────────────────────────────────────────────────────────────────────
+google-generativeai==0.8.0      # Google Gemini API
+
+# ── Cloud SDKs ────────────────────────────────────────────────────────────────
+boto3==1.34.119
+azure-storage-blob==12.20.0
+azure-mgmt-costmanagement==4.0.1
+azure-identity==1.21.0
+azure-mgmt-compute==33.0.0
+azure-mgmt-storage==22.1.1
+google-cloud-storage==2.17.0
+google-cloud-bigquery==3.30.0
+google-cloud-compute==1.22.0
 
 # ── ML (Objective 1 scaffold) ─────────────────────────────────────────────────
 # scikit-learn==1.5.0

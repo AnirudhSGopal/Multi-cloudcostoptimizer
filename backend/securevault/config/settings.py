@@ -15,7 +15,7 @@ class BaseConfig:
     # ── Database ──────────────────────────────────────────────────────────
     SQLALCHEMY_DATABASE_URI: str = os.getenv(
         "DATABASE_URL",
-        "postgresql://securevault:securevault@localhost:5432/securevault_db",
+        "sqlite:///securevault.db",
     )
     SQLALCHEMY_TRACK_MODIFICATIONS: bool = False
     SQLALCHEMY_ENGINE_OPTIONS: dict = {
@@ -42,7 +42,7 @@ class BaseConfig:
     RATELIMIT_DEFAULT: str = "200 per day;50 per hour"
 
     # ── CORS ──────────────────────────────────────────────────────────────
-    CORS_ORIGINS: list = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+    CORS_ORIGINS: list = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")]
 
     # ── Scanner ───────────────────────────────────────────────────────────
     CLONE_BASE_DIR: str = os.getenv("CLONE_BASE_DIR", "/tmp/securevault_repos")
@@ -57,7 +57,7 @@ class TestingConfig(BaseConfig):
     TESTING = True
     SQLALCHEMY_DATABASE_URI = os.getenv(
         "TEST_DATABASE_URL",
-        "postgresql://securevault:securevault@localhost:5432/securevault_test",
+        "sqlite:///:memory:",
     )
     CELERY_TASK_ALWAYS_EAGER = True   # run tasks synchronously in tests
     CELERY_TASK_EAGER_PROPAGATES = True
@@ -66,9 +66,9 @@ class TestingConfig(BaseConfig):
 
 class ProductionConfig(BaseConfig):
     # In production every secret MUST come from the environment.
-    SECRET_KEY: str = os.environ["SECRET_KEY"]
-    JWT_SECRET_KEY: str = os.environ["JWT_SECRET_KEY"]
-    SQLALCHEMY_DATABASE_URI: str = os.environ["DATABASE_URL"]
+    SECRET_KEY: str = os.environ.get("SECRET_KEY", "change-me-in-production")
+    JWT_SECRET_KEY: str = os.environ.get("JWT_SECRET_KEY", "jwt-secret-change-me")
+    SQLALCHEMY_DATABASE_URI: str = os.environ.get("DATABASE_URL", "postgresql://securevault:securevault@localhost:5432/securevault_db")
 
 
 config_map = {

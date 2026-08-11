@@ -48,7 +48,7 @@ class ScanJob(db.Model):
     status       = db.Column(db.Enum(ScanStatusEnum),
                              nullable=False, default=ScanStatusEnum.PENDING, index=True)
     error_msg    = db.Column(db.Text, nullable=True)
-    requested_by = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="SET NULL"),
+    requested_by = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"),
                              nullable=True)
     created_at   = db.Column(db.DateTime(timezone=True),
                              default=lambda: datetime.now(timezone.utc))

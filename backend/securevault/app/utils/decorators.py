@@ -59,6 +59,21 @@ def active_user_required(fn):
     return wrapper
 
 
+def admin_required(fn):
+    """Allow only active admin users."""
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        user = _get_current_user()
+        if user is None:
+            return jsonify({"error": "User not found"}), 404
+        if not user.is_active:
+            return jsonify({"error": "Account is disabled"}), 403
+        if not user.is_admin():
+            return jsonify({"error": "Admin access required"}), 403
+        return fn(*args, **kwargs)
+    return wrapper
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _get_current_user() -> User | None:

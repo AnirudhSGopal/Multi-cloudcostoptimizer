@@ -1,49 +1,42 @@
-import { TrendingDown, TrendingUp, ArrowRight } from 'lucide-react'
+import { TrendingDown, TrendingUp, ArrowRight, Plug } from 'lucide-react'
 
-const sparkData = [3100, 3400, 3600, 3500, 3700, 3900]
-const max = Math.max(...sparkData)
-
-export default function AWSCard({ onClick }) {
-  const delta = 7.2
-  const isUp = delta > 0
+export default function AWSCard({ cost = 0, storage = '0.0 GB', connected = false, onClick }) {
+  const isUp = true
 
   return (
-    <div className="provider-card" style={{ cursor: 'pointer' }} onClick={onClick}>
+    <div className="provider-card" style={{ cursor: 'pointer', opacity: connected ? 1 : 0.75 }} onClick={onClick}>
       <div className="provider-card__header">
         <div className="provider-card__name">
           <span className="provider-dot" style={{ background: 'var(--aws)' }} />
           Amazon Web Services
         </div>
-        <span className="provider-badge" style={{
-          background: isUp ? 'var(--red-dim)' : 'var(--green-dim)',
-          color: isUp ? 'var(--red)' : 'var(--green)',
-          display: 'flex', alignItems: 'center', gap: 3, fontSize: 11,
-        }}>
-          {isUp ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
-          {delta}%
-        </span>
+        {connected ? (
+          <span className="provider-badge" style={{
+            background: 'var(--green-dim)',
+            color: 'var(--green)',
+            display: 'flex', alignItems: 'center', gap: 3, fontSize: 11,
+          }}>
+            Live
+          </span>
+        ) : (
+          <span className="provider-badge" style={{
+            background: 'var(--bg-card-hover)',
+            color: 'var(--text-muted)',
+            display: 'flex', alignItems: 'center', gap: 3, fontSize: 11,
+          }}>
+            <Plug size={10} /> Disconnected
+          </span>
+        )}
       </div>
 
       <div>
-        <div className="provider-card__cost">$3,900</div>
-        <div className="provider-card__meta">This month's cost</div>
+        <div className="provider-card__cost">${cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+        <div className="provider-card__meta">Monthly cost</div>
       </div>
 
-      {/* Sparkline */}
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 28, margin: '12px 0 4px' }}>
-        {sparkData.map((v, i) => (
-          <div key={i} style={{
-            flex: 1, borderRadius: 2,
-            height: `${Math.round((v / max) * 100)}%`,
-            background: i === sparkData.length - 1 ? 'var(--aws)' : 'var(--aws-dim)',
-            transition: 'height 0.3s ease',
-          }} />
-        ))}
-      </div>
-
-      <div className="provider-card__storage">
-        <span className="provider-card__storage-label">Storage used</span>
-        <span className="provider-card__storage-val">14.2 TB</span>
+      <div className="provider-card__storage" style={{ marginTop: 12 }}>
+        <span className="provider-card__storage-label">Resources / Storage</span>
+        <span className="provider-card__storage-val">{storage}</span>
       </div>
 
       <div style={{

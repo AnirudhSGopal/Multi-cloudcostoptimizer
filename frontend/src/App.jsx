@@ -5,6 +5,7 @@ import { Toaster } from 'react-hot-toast'
 
 import useAuthStore from './store/authStore'
 import Login from './pages/Login'
+import LandingPage from './pages/LandingPage'
 import Sidebar from './components/Sidebar'
 import Navbar from './components/Navbar'
 import Dashboard from './pages/Dashboard'
@@ -12,6 +13,7 @@ import CostAnalysis from './pages/CostAnalysis'
 import SecurityAudit from './pages/SecurityAudit'
 import Recommendations from './pages/Recommendations'
 import Settings from './pages/Settings'
+import AdminPanel from './pages/AdminPanel'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -27,6 +29,14 @@ const queryClient = new QueryClient({
 function PrivateRoute({ children }) {
   const { isAuthenticated } = useAuthStore()
   return isAuthenticated ? children : <Navigate to="/login" replace />
+}
+
+// Admin Route Component
+function AdminRoute({ children }) {
+  const { isAuthenticated, user } = useAuthStore()
+  if (!isAuthenticated) return <Navigate to="/login" replace />
+  if (user?.role !== 'admin') return <Navigate to="/dashboard" replace />
+  return children
 }
 
 function AppLayout({ theme, toggleTheme }) {
@@ -78,6 +88,14 @@ function AppLayout({ theme, toggleTheme }) {
                 </PrivateRoute>
               }
             />
+            <Route
+              path="/admin"
+              element={
+                <AdminRoute>
+                  <AdminPanel />
+                </AdminRoute>
+              }
+            />
           </Routes>
         </div>
       </div>
@@ -86,10 +104,14 @@ function AppLayout({ theme, toggleTheme }) {
 }
 
 function App() {
-  const { isAuthenticated } = useAuthStore()
+  const { isAuthenticated, fetchMe } = useAuthStore()
   const [theme, setTheme] = useState(
     () => localStorage.getItem('theme') || 'dark'
   )
+
+  useEffect(() => {
+    fetchMe()
+  }, [])
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -106,8 +128,9 @@ function App() {
           <AppLayout theme={theme} toggleTheme={toggleTheme} />
         ) : (
           <Routes>
+            <Route path="/" element={<LandingPage theme={theme} toggleTheme={toggleTheme} />} />
             <Route path="/login" element={<Login />} />
-            <Route path="*" element={<Navigate to="/login" replace />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         )}
         <Toaster

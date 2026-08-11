@@ -1,9 +1,53 @@
-import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, DollarSign, ShieldCheck, Lightbulb, Settings, Zap } from 'lucide-react'
+import { NavLink, useNavigate } from 'react-router-dom'
+import { LayoutDashboard, DollarSign, ShieldCheck, Lightbulb, Settings, Zap, LogOut, Shield } from 'lucide-react'
 import useCloudStore from '../store/cloudStore'
+import useAuthStore from '../store/authStore'
+import toast from 'react-hot-toast'
+
+function LogoutButton() {
+  const navigate = useNavigate()
+  const { logout } = useAuthStore()
+
+  function handleLogout() {
+    logout()
+    toast.success('Logged out successfully')
+    navigate('/login')
+  }
+
+  return (
+    <button
+      onClick={handleLogout}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        width: '100%', padding: '8px 10px', borderRadius: 7,
+        background: 'transparent',
+        border: '1px solid var(--border)',
+        fontSize: 12, fontWeight: 600,
+        color: 'var(--text-muted)',
+        cursor: 'pointer',
+        transition: 'all 0.18s ease',
+        fontFamily: 'inherit',
+      }}
+      onMouseEnter={e => {
+        e.currentTarget.style.background = 'rgba(239,68,68,0.08)'
+        e.currentTarget.style.borderColor = 'rgba(239,68,68,0.3)'
+        e.currentTarget.style.color = 'var(--red)'
+      }}
+      onMouseLeave={e => {
+        e.currentTarget.style.background = 'transparent'
+        e.currentTarget.style.borderColor = 'var(--border)'
+        e.currentTarget.style.color = 'var(--text-muted)'
+      }}
+    >
+      <LogOut size={13} />
+      Sign out
+    </button>
+  )
+}
 
 export default function Sidebar() {
   const { alerts, dismissedAlerts } = useCloudStore()
+  const { user } = useAuthStore()
   const activeAlerts = alerts.filter(a => !dismissedAlerts.includes(a.id))
   const criticalCount = activeAlerts.filter(a => a.type === 'critical').length
 
@@ -14,6 +58,10 @@ export default function Sidebar() {
     { to: '/recommendations', icon: Lightbulb,       label: 'Recommendations', badge: 6 },
     { to: '/settings',        icon: Settings,        label: 'Settings'        },
   ]
+
+  if (user?.role === 'admin') {
+    navItems.push({ to: '/admin', icon: Shield, label: 'Admin Panel' })
+  }
 
   return (
     <aside className="sidebar">
@@ -49,7 +97,8 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      <div style={{ padding: '10px 18px', borderTop: '1px solid var(--border)' }}>
+      {/* Bottom section: AI status + logout */}
+      <div style={{ padding: '10px 18px', borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{
           display: 'flex', alignItems: 'center', gap: 6,
           padding: '7px 10px', borderRadius: 7,
@@ -65,6 +114,7 @@ export default function Sidebar() {
           }} />
           AI Engine Active
         </div>
+        <LogoutButton />
       </div>
 
       <div className="sidebar-footer">v1.0.0 · 3 providers connected</div>

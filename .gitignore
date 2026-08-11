@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+instance/
+
+# Environments / Credentials
+.env
+.env.local
+.env.*.local
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Audit scratch files
+audit_runner.py
+audit_b2_b10.py
+audit_*.json
+
+# Logs
+logs/
+*.log
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/

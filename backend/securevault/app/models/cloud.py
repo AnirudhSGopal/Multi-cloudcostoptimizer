@@ -31,7 +31,11 @@ class CloudMetric(db.Model):
     collected_at = db.Column(db.DateTime(timezone=True),
                              default=lambda: datetime.now(timezone.utc), index=True)
 
-    owner = db.relationship("User", backref=db.backref("cloud_metrics", lazy="dynamic"))
+    cloud_account_id = db.Column(db.Integer, db.ForeignKey("cloud_accounts.id", ondelete="CASCADE"),
+                                 nullable=True, index=True)
+
+    owner   = db.relationship("User", backref=db.backref("cloud_metrics", lazy="dynamic"))
+    account = db.relationship("CloudAccount", back_populates="metrics")
 
     def to_dict(self) -> dict:
         return {

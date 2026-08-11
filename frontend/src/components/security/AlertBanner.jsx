@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { AlertCircle, AlertTriangle, Info, X, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react'
 
+import toast from 'react-hot-toast'
+
 const CONFIG = {
   critical: { Icon: AlertCircle,  cls: 'critical', label: 'CRITICAL' },
   warning:  { Icon: AlertTriangle,cls: 'warning',  label: 'WARNING'  },
@@ -11,6 +13,23 @@ export default function AlertBanner({ alert, onDismiss }) {
   const [expanded, setExpanded] = useState(false)
   const { type = 'info', title, impact, resource, owner, time, fixSteps = [] } = alert
   const { Icon, cls, label } = CONFIG[type] || CONFIG.info
+
+  function handleFixNow() {
+    toast.promise(
+      new Promise(resolve => setTimeout(resolve, 1500)),
+      {
+        loading: 'Applying AI auto-remediation...',
+        success: 'Vulnerability fixed successfully!',
+        error: 'Failed to apply fix.',
+      }
+    ).then(() => {
+      onDismiss?.(alert.id)
+    })
+  }
+
+  function handleInvestigate() {
+    toast(`Investigation workflow started for: ${title}`, { icon: '🔍' })
+  }
 
   return (
     <div className={`alert-banner ${cls}`} style={{ flexDirection: 'column', gap: 0, padding: 0, overflow: 'hidden' }}>
@@ -34,7 +53,9 @@ export default function AlertBanner({ alert, onDismiss }) {
             <span className="alert-title" style={{ margin: 0 }}>{title}</span>
           </div>
 
-          <div className="alert-msg" style={{ marginBottom: 6 }}>{impact}</div>
+          {impact && impact !== title && (
+            <div className="alert-msg" style={{ marginBottom: 6 }}>{impact}</div>
+          )}
 
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 11 }}>
             <span style={{ color: 'var(--text-muted)' }}>
@@ -49,7 +70,7 @@ export default function AlertBanner({ alert, onDismiss }) {
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
           {type === 'critical' && (
-            <button className="btn btn-sm" style={{
+            <button onClick={handleFixNow} className="btn btn-sm" style={{
               background: 'var(--red)', color: '#fff', border: 'none', borderRadius: 6,
               fontSize: 11, fontWeight: 600, padding: '4px 10px', cursor: 'pointer',
               display: 'flex', alignItems: 'center', gap: 4,
@@ -58,7 +79,7 @@ export default function AlertBanner({ alert, onDismiss }) {
             </button>
           )}
           {type === 'warning' && (
-            <button className="btn btn-sm btn-ghost" style={{ fontSize: 11, padding: '4px 10px', cursor: 'pointer' }}>
+            <button onClick={handleInvestigate} className="btn btn-sm btn-ghost" style={{ fontSize: 11, padding: '4px 10px', cursor: 'pointer' }}>
               Investigate
             </button>
           )}

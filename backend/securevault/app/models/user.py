@@ -34,6 +34,8 @@ class User(db.Model):
     # ── Relationships ─────────────────────────────────────────────────────
     scan_jobs = db.relationship("ScanJob", back_populates="owner",
                                  lazy="dynamic", cascade="all, delete-orphan")
+    cloud_accounts = db.relationship("CloudAccount", back_populates="owner",
+                                     lazy="dynamic", cascade="all, delete-orphan")
 
     # ── Password helpers ──────────────────────────────────────────────────
     @property

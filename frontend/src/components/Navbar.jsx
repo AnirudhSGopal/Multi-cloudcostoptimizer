@@ -1,6 +1,9 @@
-import { useLocation } from 'react-router-dom'
-import { Bell, RefreshCw, Sun, Moon } from 'lucide-react'
+import { useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { Bell, RefreshCw, Sun, Moon, LogOut, User } from 'lucide-react'
 import useCloudStore from '../store/cloudStore'
+import useAuthStore from '../store/authStore'
+import toast from 'react-hot-toast'
 
 const pageMeta = {
   '/dashboard':       { title: 'Dashboard',       sub: 'Real-time overview across all cloud providers' },
@@ -8,14 +11,31 @@ const pageMeta = {
   '/security':        { title: 'Security Audit',  sub: 'Threats, compliance checks and active alerts' },
   '/recommendations': { title: 'Recommendations', sub: 'AI-powered cost and security optimizations' },
   '/settings':        { title: 'Settings',        sub: 'Cloud credentials and system preferences' },
+  '/admin':           { title: 'Admin Panel',     sub: 'User management, platform oversight and system health' },
 }
 
 export default function Navbar({ theme, toggleTheme }) {
   const { pathname } = useLocation()
+  const navigate = useNavigate()
   const { alerts, dismissedAlerts } = useCloudStore()
+  const { user, logout } = useAuthStore()
+  const [showMenu, setShowMenu] = useState(false)
+
   const page = pageMeta[pathname] ?? { title: 'CloudOpt', sub: '' }
   const activeAlerts = alerts.filter(a => !dismissedAlerts.includes(a.id))
   const criticalCount = activeAlerts.filter(a => a.type === 'critical').length
+
+  // Derive initials from user data
+  const initials = user
+    ? (user.username || user.email || 'U').slice(0, 2).toUpperCase()
+    : 'AU'
+
+  function handleLogout() {
+    logout()
+    toast.success('Logged out successfully')
+    navigate('/login')
+    setShowMenu(false)
+  }
 
   return (
     <header className="navbar">
@@ -42,8 +62,76 @@ export default function Navbar({ theme, toggleTheme }) {
             }} />
           )}
         </button>
-        <div className="nav-avatar" title="User menu">
-          <span style={{ fontSize: 10, fontWeight: 700, color: '#fff' }}>AU</span>
+
+        {/* Avatar with dropdown */}
+        <div style={{ position: 'relative' }}>
+          <div
+            className="nav-avatar"
+            title="User menu"
+            onClick={() => setShowMenu(v => !v)}
+            style={{ cursor: 'pointer' }}
+          >
+            <span style={{ fontSize: 10, fontWeight: 700, color: '#fff' }}>{initials}</span>
+          </div>
+
+          {showMenu && (
+            <>
+              {/* backdrop */}
+              <div
+                style={{ position: 'fixed', inset: 0, zIndex: 99 }}
+                onClick={() => setShowMenu(false)}
+              />
+              {/* dropdown */}
+              <div style={{
+                position: 'absolute', top: 'calc(100% + 8px)', right: 0,
+                zIndex: 100,
+                background: 'var(--bg-card)', border: '1px solid var(--border)',
+                borderRadius: 10, padding: '6px',
+                minWidth: 190,
+                boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+              }}>
+                {/* user info */}
+                <div style={{ padding: '8px 10px 10px', borderBottom: '1px solid var(--border)', marginBottom: 4 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)' }}>
+                    {user?.username || user?.email || 'User'}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>
+                    {user?.email || ''}
+                  </div>
+                </div>
+                {/* profile option */}
+                <button
+                  onClick={() => { navigate('/settings'); setShowMenu(false) }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    width: '100%', padding: '7px 10px', borderRadius: 7,
+                    background: 'transparent', border: 'none',
+                    fontSize: 12, color: 'var(--text-muted)',
+                    cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-card-hover)'; e.currentTarget.style.color = 'var(--text-primary)' }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-muted)' }}
+                >
+                  <User size={13} /> Settings
+                </button>
+                {/* logout option */}
+                <button
+                  onClick={handleLogout}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    width: '100%', padding: '7px 10px', borderRadius: 7,
+                    background: 'transparent', border: 'none',
+                    fontSize: 12, color: 'var(--red)',
+                    cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(239,68,68,0.08)' }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+                >
+                  <LogOut size={13} /> Sign out
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </header>

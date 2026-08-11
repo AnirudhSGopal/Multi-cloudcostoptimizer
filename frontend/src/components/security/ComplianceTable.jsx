@@ -5,7 +5,9 @@ const rows = [
   { framework: 'PCI DSS',        status: 'Fail', score: '76%', findings: '2 high, 5 medium' },
 ]
 
-export default function ComplianceTable() {
+export default function ComplianceTable({ scanData }) {
+  const dataToRender = scanData && scanData.length > 0 ? scanData : rows;
+
   return (
     <div style={{ overflowX: 'auto' }}>
       <table className="data-table">
@@ -18,7 +20,7 @@ export default function ComplianceTable() {
           </tr>
         </thead>
         <tbody>
-          {rows.map(row => (
+          {dataToRender.map(row => (
             <tr key={row.framework}>
               <td className="td-strong">{row.framework}</td>
               <td>

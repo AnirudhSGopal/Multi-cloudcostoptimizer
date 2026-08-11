@@ -1,5 +1,6 @@
+import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { DollarSign, HardDrive, ShieldAlert, TrendingDown, ArrowRight, Zap } from 'lucide-react'
+import { DollarSign, HardDrive, ShieldAlert, TrendingDown, ArrowRight, Zap, Plug } from 'lucide-react'
 import AlertBanner from '../components/security/AlertBanner'
 import AWSCard from '../components/cloud/AWSCard'
 import GCPCard from '../components/cloud/GCPCard'
@@ -8,64 +9,140 @@ import CostChart from '../components/charts/CostChart'
 import StorageChart from '../components/charts/StorageChart'
 import SecurityGauge from '../components/charts/SecurityGauge'
 import useCloudStore from '../store/cloudStore'
-
-const STAT_CARDS = [
-  {
-    label: 'Total Monthly Cost', value: '$9,800', sub: 'All providers combined',
-    delta: '▲ $780 vs last month', deltaUp: true,
-    icon: DollarSign, iconBg: 'var(--blue-dim)', iconColor: 'var(--blue)',
-    insight: 'AWS driving 40% of spend',
-  },
-  {
-    label: 'Total Storage Used', value: '34.0 TB', sub: 'Across AWS, GCP, Azure',
-    delta: '▼ 1.2% vs last month', deltaUp: false,
-    icon: HardDrive, iconBg: 'var(--azure-dim)', iconColor: 'var(--azure)',
-    insight: '8.2 TB infrequently accessed',
-  },
-  {
-    label: 'Security Alerts', value: '3', sub: '2 critical · 1 warning',
-    delta: 'Immediate action required', deltaUp: true,
-    icon: ShieldAlert, iconBg: 'var(--red-dim)', iconColor: 'var(--red)',
-    valueColor: 'var(--red)', insight: 'Azure public access unresolved',
-  },
-  {
-    label: 'Potential Savings', value: '$1,240', sub: '6 AI recommendations',
-    delta: 'S3 tiering + Glacier top sources', deltaUp: false,
-    icon: TrendingDown, iconBg: 'var(--green-dim)', iconColor: 'var(--green)',
-    valueColor: 'var(--green)', insight: 'Act now to save this month',
-  },
-]
+import Button from '../components/common/Button'
 
 export default function Dashboard() {
   const navigate = useNavigate()
-  const { alerts, dismissedAlerts, dismissAlert } = useCloudStore()
+  const {
+    alerts,
+    dismissedAlerts,
+    dismissAlert,
+    securityScore,
+    accounts,
+    costData,
+    resources,
+    recommendations,
+    costLoading,
+    fetchAccounts,
+    syncAllAccounts,
+  } = useCloudStore()
+
+  useEffect(() => {
+    fetchAccounts().then(() => {
+      syncAllAccounts()
+    })
+  }, [fetchAccounts, syncAllAccounts])
+
   const activeAlerts = alerts.filter(a => !dismissedAlerts.includes(a.id))
+  const criticalCount = activeAlerts.filter(a => a.type === 'critical').length
+  const warningCount = activeAlerts.filter(a => a.type === 'warning').length
+
+  // Calculate live values from connected cloud accounts
+  const totalCost = (costData || []).reduce((acc, curr) => acc + (curr.monthly_cost || 0), 0)
+  const totalSavings = (recommendations || []).reduce((acc, curr) => acc + (curr.estimated_monthly_savings || 0), 0)
+  const totalResourcesCount = (resources || []).length
+
+  const awsCost = (costData || []).filter(c => c.provider === 'aws').reduce((a, c) => a + c.monthly_cost, 0)
+  const gcpCost = (costData || []).filter(c => c.provider === 'gcp').reduce((a, c) => a + c.monthly_cost, 0)
+  const azureCost = (costData || []).filter(c => c.provider === 'azure').reduce((a, c) => a + c.monthly_cost, 0)
+
+  const hasAWS = accounts.some(a => a.provider === 'aws')
+  const hasGCP = accounts.some(a => a.provider === 'gcp')
+  const hasAzure = accounts.some(a => a.provider === 'azure')
+
+  const STAT_CARDS = [
+    {
+      label: 'Total Monthly Cost',
+      value: `$${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+      sub: accounts.length > 0 ? `${accounts.length} cloud account(s) connected` : 'No accounts connected',
+      delta: costLoading ? 'Syncing...' : `${costData.length} active service metrics`,
+      deltaUp: false,
+      icon: DollarSign, iconBg: 'var(--blue-dim)', iconColor: 'var(--blue)',
+      insight: accounts.length > 0 ? 'Live billing data' : 'Connect in Settings',
+    },
+    {
+      label: 'Discovered Resources',
+      value: `${totalResourcesCount}`,
+      sub: 'Across compute & storage',
+      delta: `${resources.filter(r => r.status === 'stopped' || r.status === 'unattached').length} idle / unattached`,
+      deltaUp: false,
+      icon: HardDrive, iconBg: 'var(--azure-dim)', iconColor: 'var(--azure)',
+      insight: 'Real-time discovery',
+    },
+    {
+      label: 'Security Alerts',
+      value: activeAlerts.length.toString(),
+      sub: `${criticalCount} critical · ${warningCount} warning`,
+      delta: criticalCount > 0 ? 'Immediate action required' : 'Review recommended',
+      deltaUp: criticalCount > 0,
+      icon: ShieldAlert, iconBg: criticalCount > 0 ? 'var(--red-dim)' : 'var(--yellow-dim)', iconColor: criticalCount > 0 ? 'var(--red)' : 'var(--yellow)',
+      valueColor: criticalCount > 0 ? 'var(--red)' : 'var(--text-primary)',
+      insight: criticalCount > 0 ? 'Critical vulnerabilities found' : 'Security posture stable',
+    },
+    {
+      label: 'AI Cost Savings',
+      value: `$${totalSavings.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+      sub: `${recommendations.length} optimization recommendation(s)`,
+      delta: 'Deterministic rule calculation',
+      deltaUp: false,
+      icon: TrendingDown, iconBg: 'var(--green-dim)', iconColor: 'var(--green)',
+      valueColor: 'var(--green)', insight: 'Ready to optimize',
+    },
+  ]
 
   return (
     <div className="page-content">
 
+      {/* ── Empty State Banner if no accounts ── */}
+      {accounts.length === 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16,
+          padding: '16px 20px',
+          background: 'linear-gradient(135deg, rgba(52,170,255,0.1), rgba(157,114,255,0.1))',
+          border: '1px solid var(--accent-glow)',
+          borderRadius: 'var(--r-md)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Plug size={20} color="var(--accent)" />
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>
+                No Cloud Accounts Connected
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                Connect your AWS, GCP, or Azure accounts in Settings to view live multi-cloud billing, resource discovery, and AI optimization recommendations.
+              </div>
+            </div>
+          </div>
+          <Button onClick={() => navigate('/settings')} icon={ArrowRight}>
+            Connect Provider
+          </Button>
+        </div>
+      )}
+
       {/* ── AI Insight Banner ── */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 12,
-        padding: '10px 14px',
-        background: 'linear-gradient(135deg, var(--accent-dim), var(--azure-dim))',
-        border: '1px solid var(--accent-glow)',
-        borderRadius: 'var(--r-md)', fontSize: 12,
-      }}>
-        <Zap size={14} color="var(--accent)" style={{ flexShrink: 0 }} />
-        <span style={{ color: 'var(--text-secondary)' }}>
-          AI detected an <strong style={{ color: 'var(--text-primary)' }}>anomalous spend spike (+23%)</strong> in
-          AWS us-east-1 over 48h — likely unoptimized S3 lifecycle policies on 4 buckets (8.2 TB).
-          Estimated savings: <strong style={{ color: 'var(--green)' }}>$312/mo</strong>.
-        </span>
-        <button
-          onClick={() => navigate('/recommendations')}
-          className="btn btn-sm btn-ghost"
-          style={{ marginLeft: 'auto', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 5 }}
-        >
-          View fix <ArrowRight size={11} />
-        </button>
-      </div>
+      {recommendations.length > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 12,
+          padding: '10px 14px',
+          background: 'linear-gradient(135deg, var(--accent-dim), var(--azure-dim))',
+          border: '1px solid var(--accent-glow)',
+          borderRadius: 'var(--r-md)', fontSize: 12,
+        }}>
+          <Zap size={14} color="var(--accent)" style={{ flexShrink: 0 }} />
+          <span style={{ color: 'var(--text-secondary)' }}>
+            AI Cost Optimizer detected <strong style={{ color: 'var(--text-primary)' }}>{recommendations.length} optimization opportunities</strong>.
+            Top recommendation: <strong style={{ color: 'var(--text-primary)' }}>{recommendations[0]?.title}</strong>.
+            Estimated savings: <strong style={{ color: 'var(--green)' }}>${totalSavings.toFixed(2)}/mo</strong>.
+          </span>
+          <button
+            onClick={() => navigate('/recommendations')}
+            className="btn btn-sm btn-ghost"
+            style={{ marginLeft: 'auto', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 5 }}
+          >
+            View fix <ArrowRight size={11} />
+          </button>
+        </div>
+      )}
 
       {/* ── Active Alerts ── */}
       {activeAlerts.length > 0 && (
@@ -108,7 +185,7 @@ export default function Dashboard() {
                 <div style={{
                   marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border)',
                   fontSize: 11,
-                  color: s.deltaUp ? 'var(--red)' : s.label === 'Potential Savings' ? 'var(--green)' : 'var(--text-muted)',
+                  color: s.deltaUp ? 'var(--red)' : s.label === 'AI Cost Savings' ? 'var(--green)' : 'var(--text-muted)',
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                 }}>
                   <span>{s.delta}</span>
@@ -130,9 +207,24 @@ export default function Dashboard() {
           </button>
         </div>
         <div className="providers-grid">
-          <AWSCard   onClick={() => navigate('/cost-analysis')} />
-          <GCPCard   onClick={() => navigate('/cost-analysis')} />
-          <AzureCard onClick={() => navigate('/cost-analysis')} />
+          <AWSCard
+            cost={awsCost}
+            storage={`${resources.filter(r => r.provider === 'aws').length} resources`}
+            connected={hasAWS}
+            onClick={() => navigate('/cost-analysis')}
+          />
+          <GCPCard
+            cost={gcpCost}
+            storage={`${resources.filter(r => r.provider === 'gcp').length} resources`}
+            connected={hasGCP}
+            onClick={() => navigate('/cost-analysis')}
+          />
+          <AzureCard
+            cost={azureCost}
+            storage={`${resources.filter(r => r.provider === 'azure').length} resources`}
+            connected={hasAzure}
+            onClick={() => navigate('/cost-analysis')}
+          />
         </div>
       </div>
 
@@ -143,7 +235,7 @@ export default function Dashboard() {
         </div>
         <div className="charts-grid">
           <div className="card chart-card">
-            <div className="card__title">Cost trend — 6 months</div>
+            <div className="card__title">Cost trend — monthly</div>
             <CostChart />
           </div>
           <div className="card chart-card">
@@ -152,7 +244,7 @@ export default function Dashboard() {
           </div>
           <div className="card chart-card">
             <div className="card__title">Security score</div>
-            <SecurityGauge score={74} />
+            <SecurityGauge score={securityScore} />
             <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
               {[
                 { label: 'Encryption', val: 92, color: 'var(--green)' },

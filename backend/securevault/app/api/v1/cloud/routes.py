@@ -1,57 +1,327 @@
 """
-Cloud provider integration endpoints — Objective 1.
+Cloud provider integration endpoints.
 
-GET    /api/v1/cloud/          – list connected cloud accounts
-POST   /api/v1/cloud/          – add new cloud account
-GET    /api/v1/cloud/<id>      – get cloud account details
-DELETE /api/v1/cloud/<id>      – remove cloud account
+GET    /api/v1/cloud/accounts       – list connected cloud accounts
+POST   /api/v1/cloud/accounts       – add or update a cloud account
+POST   /api/v1/cloud/accounts/test  – dry-run test credentials
+GET    /api/v1/cloud/accounts/<id>  – sync live cost/resources & get recommendations
+DELETE /api/v1/cloud/accounts/<id>  – remove a cloud account
 """
+import logging
+from datetime import datetime, timezone
 from flask import Blueprint, jsonify, request
-from flask_jwt_extended import jwt_required
+from flask_jwt_extended import jwt_required, get_jwt_identity
 
+from app.core.extensions import db
 from app.utils.decorators import active_user_required
+from app.models.user import User
+from app.models.cloud import CloudMetric, CloudProviderEnum
+from app.models.cloud_account import CloudAccount, AccountStatusEnum
+from app.services.cloud import get_provider_service
+from app.services.cloud import optimizer
+
+logger = logging.getLogger(__name__)
 
 cloud_bp = Blueprint("cloud", __name__)
 
-_NOT_IMPLEMENTED = {"message": "Cloud integration endpoints not yet implemented."}
+
+# ── 1. Dry-Run Test Connection Endpoint ──────────────────────────────────────
+
+@cloud_bp.post("/accounts/test")
+@cloud_bp.post("/test")
+@jwt_required()
+@active_user_required
+def test_cloud_credentials():
+    """
+    Test credentials without storing them.
+    Expects body:
+      { "provider": "aws"|"gcp"|"azure", "credentials": { ... } }
+    """
+    data = request.get_json(silent=True) or {}
+    provider_str = (data.get("provider") or "").strip().lower()
+    credentials = data.get("credentials") or {}
+
+    if not provider_str or provider_str not in ("aws", "gcp", "azure"):
+        return jsonify({"success": False, "error": "Provider must be 'aws', 'gcp', or 'azure'"}), 400
+
+    if not credentials or not isinstance(credentials, dict):
+        return jsonify({"success": False, "error": "Credentials object is required"}), 400
+
+    try:
+        service = get_provider_service(provider_str)
+        validation_res = _call_provider_validate(service, provider_str, credentials)
+
+        if not validation_res.get("success"):
+            return jsonify({
+                "success": False,
+                "error": validation_res.get("error", f"{provider_str.upper()} credential validation failed")
+            }), 400
+
+        return jsonify({
+            "success": True,
+            "message": f"{provider_str.upper()} credentials verified successfully.",
+            "data": validation_res.get("data")
+        }), 200
+
+    except Exception as exc:
+        logger.exception("Error testing cloud credentials")
+        return jsonify({"success": False, "error": str(exc)}), 500
 
 
+# ── 2. List Connected Accounts ────────────────────────────────────────────────
+
+@cloud_bp.get("/accounts")
 @cloud_bp.get("/")
 @jwt_required()
 @active_user_required
 def list_cloud_accounts():
-    return jsonify(_NOT_IMPLEMENTED), 501
+    """
+    List all connected cloud accounts for the authenticated user.
+    Credentials are NEVER returned in this response.
+    """
+    user_id = get_jwt_identity()
+    accounts = CloudAccount.query.filter_by(user_id=user_id).all()
+    return jsonify({
+        "accounts": [acc.to_dict() for acc in accounts]
+    }), 200
 
 
+# ── 3. Add / Update Cloud Account ─────────────────────────────────────────────
+
+@cloud_bp.post("/accounts")
 @cloud_bp.post("/")
 @jwt_required()
 @active_user_required
 def add_cloud_account():
-    return jsonify(_NOT_IMPLEMENTED), 501
+    """
+    Validate and store (or update) cloud provider credentials.
+    Expects body:
+      { "provider": "aws"|"gcp"|"azure", "account_label": str, "credentials": { ... } }
+    """
+    user_id = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+    provider_str = (data.get("provider") or "").strip().lower()
+    account_label = (data.get("account_label") or f"{provider_str.upper()} Account").strip()
+    credentials = data.get("credentials") or {}
+
+    if not provider_str or provider_str not in ("aws", "gcp", "azure"):
+        return jsonify({"error": "Provider must be 'aws', 'gcp', or 'azure'"}), 400
+
+    if not credentials or not isinstance(credentials, dict):
+        return jsonify({"error": "Credentials object is required"}), 400
+
+    # 1. Validate credentials first with live call
+    try:
+        service = get_provider_service(provider_str)
+        validation_res = _call_provider_validate(service, provider_str, credentials)
+
+        if not validation_res.get("success"):
+            return jsonify({
+                "error": validation_res.get("error", f"{provider_str.upper()} credential validation failed")
+            }), 400
+    except Exception as exc:
+        return jsonify({"error": f"Validation failed: {str(exc)}"}), 400
+
+    # 2. Check for existing account for user + provider
+    provider_enum = CloudProviderEnum(provider_str)
+    account = CloudAccount.query.filter_by(user_id=user_id, provider=provider_enum).first()
+
+    if account is None:
+        account = CloudAccount(
+            user_id=user_id,
+            provider=provider_enum,
+            account_label=account_label,
+            status=AccountStatusEnum.CONNECTED
+        )
+        db.session.add(account)
+    else:
+        account.account_label = account_label
+        account.status = AccountStatusEnum.CONNECTED
+
+    # Encrypt and store
+    account.set_credentials(credentials)
+    db.session.commit()
+
+    logger.info("Saved %s cloud account for user %s", provider_str, user_id)
+    return jsonify({
+        "message": f"{provider_str.upper()} account connected successfully.",
+        "account": account.to_dict()
+    }), 201
 
 
+# ── 4. Sync Account & Get Live Cost/Resources/Recommendations ────────────────
+
+@cloud_bp.get("/accounts/<int:account_id>")
 @cloud_bp.get("/<int:account_id>")
 @jwt_required()
 @active_user_required
 def get_cloud_account(account_id: int):
-    return jsonify(_NOT_IMPLEMENTED), 501
+    """
+    Fetch live cost data & resource metadata for a specific account,
+    run the AI cost optimizer, persist CloudMetrics, and return findings.
+    """
+    account = _get_account_or_404(account_id)
+    provider_str = account.provider.value
+
+    try:
+        creds = account.get_credentials()
+        service = get_provider_service(provider_str)
+
+        # Fetch costs
+        cost_res = _call_provider_cost(service, provider_str, creds)
+        cost_data = cost_res.get("data", []) if cost_res.get("success") else []
+        cost_error = cost_res.get("error") if not cost_res.get("success") else None
+
+        # Fetch resources
+        resource_res = _call_provider_resources(service, provider_str, creds)
+        resources = resource_res.get("data", []) if resource_res.get("success") else []
+
+        # Run AI-based cost optimizer
+        recommendations = optimizer.analyze(resources, cost_data)
+
+        # Update account status and last_synced_at
+        account.last_synced_at = datetime.now(timezone.utc)
+        if cost_res.get("success") or resource_res.get("success"):
+            account.status = AccountStatusEnum.CONNECTED
+        else:
+            account.status = AccountStatusEnum.ERROR
+
+        # Persist CloudMetrics summary rows for historical stats
+        _persist_metrics(account, cost_data, resources)
+        db.session.commit()
+
+        return jsonify({
+            "account": account.to_dict(),
+            "cost_data": cost_data,
+            "resources": resources,
+            "recommendations": recommendations,
+            "cost_error": cost_error,
+        }), 200
+
+    except Exception as exc:
+        logger.exception("Error syncing cloud account %d", account_id)
+        account.status = AccountStatusEnum.ERROR
+        db.session.commit()
+        return jsonify({"error": f"Failed to sync account: {str(exc)}"}), 500
 
 
+# ── 5. Delete Cloud Account ───────────────────────────────────────────────────
+
+@cloud_bp.delete("/accounts/<int:account_id>")
 @cloud_bp.delete("/<int:account_id>")
 @jwt_required()
 @active_user_required
 def delete_cloud_account(account_id: int):
-    return jsonify(_NOT_IMPLEMENTED), 501
+    """
+    Delete a connected cloud account and cascade-delete its metrics.
+    """
+    account = _get_account_or_404(account_id)
+    provider_name = account.provider.value.upper()
 
-def _get_job_or_404(job_id: int) -> ScanJob:
+    db.session.delete(account)
+    db.session.commit()
+
+    logger.info("Deleted %s account %d for user %s", provider_name, account_id, account.user_id)
+    return jsonify({"message": f"{provider_name} account removed successfully."}), 200
+
+
+# ── Internal Helpers ──────────────────────────────────────────────────────────
+
+def _get_account_or_404(account_id: int) -> CloudAccount:
     from flask import abort
-    from flask_jwt_extended import get_jwt_identity
-    from app.models.user import User
-
-    job = ScanJob.query.get_or_404(job_id)
     user_id = get_jwt_identity()
     user = User.query.get(user_id)
 
-    if not user.is_admin() and job.requested_by != user_id:
+    account = CloudAccount.query.get_or_404(account_id)
+    if not user.is_admin() and account.user_id != user_id:
         abort(403)
-    return job
+    return account
+
+
+def _call_provider_validate(service, provider_str: str, creds: dict) -> dict:
+    if provider_str == "aws":
+        return service.validate_credentials(
+            access_key_id=creds.get("access_key_id") or creds.get("aws_access_key_id"),
+            secret_access_key=creds.get("secret_access_key") or creds.get("aws_secret_access_key"),
+            region=creds.get("region") or creds.get("aws_region") or "us-east-1"
+        )
+    elif provider_str == "gcp":
+        return service.validate_credentials(
+            service_account_json=creds.get("service_account_json") or creds.get("gcp_sa_json"),
+            project_id=creds.get("project_id") or creds.get("gcp_project_id")
+        )
+    elif provider_str == "azure":
+        return service.validate_credentials(
+            subscription_id=creds.get("subscription_id") or creds.get("azure_subscription_id"),
+            tenant_id=creds.get("tenant_id") or creds.get("azure_tenant_id"),
+            client_id=creds.get("client_id") or creds.get("azure_client_id"),
+            client_secret=creds.get("client_secret") or creds.get("azure_client_secret")
+        )
+    return {"success": False, "error": "Unknown provider"}
+
+
+def _call_provider_cost(service, provider_str: str, creds: dict) -> dict:
+    if provider_str == "aws":
+        return service.get_cost_data(
+            access_key_id=creds.get("access_key_id") or creds.get("aws_access_key_id"),
+            secret_access_key=creds.get("secret_access_key") or creds.get("aws_secret_access_key"),
+            region=creds.get("region") or creds.get("aws_region") or "us-east-1"
+        )
+    elif provider_str == "gcp":
+        return service.get_cost_data(
+            service_account_json=creds.get("service_account_json") or creds.get("gcp_sa_json"),
+            project_id=creds.get("project_id") or creds.get("gcp_project_id"),
+            bigquery_dataset=creds.get("bigquery_dataset") or creds.get("gcp_dataset")
+        )
+    elif provider_str == "azure":
+        return service.get_cost_data(
+            subscription_id=creds.get("subscription_id") or creds.get("azure_subscription_id"),
+            tenant_id=creds.get("tenant_id") or creds.get("azure_tenant_id"),
+            client_id=creds.get("client_id") or creds.get("azure_client_id"),
+            client_secret=creds.get("client_secret") or creds.get("azure_client_secret")
+        )
+    return {"success": False, "error": "Unknown provider"}
+
+
+def _call_provider_resources(service, provider_str: str, creds: dict) -> dict:
+    if provider_str == "aws":
+        return service.get_resource_metadata(
+            access_key_id=creds.get("access_key_id") or creds.get("aws_access_key_id"),
+            secret_access_key=creds.get("secret_access_key") or creds.get("aws_secret_access_key"),
+            region=creds.get("region") or creds.get("aws_region") or "us-east-1"
+        )
+    elif provider_str == "gcp":
+        return service.get_resource_metadata(
+            service_account_json=creds.get("service_account_json") or creds.get("gcp_sa_json"),
+            project_id=creds.get("project_id") or creds.get("gcp_project_id")
+        )
+    elif provider_str == "azure":
+        return service.get_resource_metadata(
+            subscription_id=creds.get("subscription_id") or creds.get("azure_subscription_id"),
+            tenant_id=creds.get("tenant_id") or creds.get("azure_tenant_id"),
+            client_id=creds.get("client_id") or creds.get("azure_client_id"),
+            client_secret=creds.get("client_secret") or creds.get("azure_client_secret")
+        )
+    return {"success": False, "error": "Unknown provider"}
+
+
+def _persist_metrics(account: CloudAccount, cost_data: list, resources: list) -> None:
+    """Save cost summary metrics into CloudMetric table."""
+    try:
+        # Clear existing metrics for this account
+        CloudMetric.query.filter_by(cloud_account_id=account.id).delete()
+
+        for item in cost_data:
+            metric = CloudMetric(
+                user_id=account.user_id,
+                cloud_account_id=account.id,
+                provider=account.provider,
+                account_id=account.account_label,
+                region="global",
+                bucket_name=item.get("service"),
+                storage_class="COST_SUMMARY",
+                cost_usd=item.get("monthly_cost", 0.0),
+            )
+            db.session.add(metric)
+    except Exception as exc:
+        logger.warning("Failed to persist CloudMetrics: %s", exc)

@@ -1,14 +1,16 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import useAuthStore from '../store/authStore'
+import { Sun, Moon } from 'lucide-react'
 
 const styles = `
   @import url('https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;500;600;700;800&display=swap');
 
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-  :root {
+  :root,
+  [data-theme="dark"] {
     --bg: #0d0f14;
     --surface: #13161e;
     --surface2: #1a1e2a;
@@ -27,6 +29,29 @@ const styles = `
     --radius: 10px;
     --font-head: 'Syne', sans-serif;
     --font-mono: 'Space Mono', monospace;
+    --left-panel-bg: linear-gradient(160deg, #13161e 0%, #0f1219 100%);
+  }
+
+  [data-theme="light"] {
+    --bg: #f0f2f8;
+    --surface: #ffffff;
+    --surface2: #f7f8fc;
+    --border: #e2e5f0;
+    --border2: #d0d4e8;
+    --accent: #3d7fff;
+    --accent-dim: rgba(61,127,255,0.10);
+    --accent-glow: rgba(61,127,255,0.20);
+    --green: #18a065;
+    --green-dim: rgba(24,160,101,0.10);
+    --red: #e03535;
+    --red-dim: rgba(224,53,53,0.10);
+    --text: #0f1320;
+    --text-muted: #8892b0;
+    --text-dim: #4a5578;
+    --radius: 10px;
+    --font-head: 'Syne', sans-serif;
+    --font-mono: 'Space Mono', monospace;
+    --left-panel-bg: linear-gradient(160deg, #f3f5f8 0%, #e2e6ee 100%);
   }
 
   .auth-root {
@@ -65,8 +90,8 @@ const styles = `
     width: 420px; flex-shrink: 0;
     display: flex; flex-direction: column;
     padding: 40px;
-    border-right: 1px solid var(--border);
-    background: linear-gradient(160deg, #13161e 0%, #0f1219 100%);
+    border-right: 1px solid var(--border2);
+    background: var(--left-panel-bg);
     position: relative; overflow: hidden;
   }
 
@@ -475,7 +500,7 @@ const SignupForm = () => {
       toast.error('Password must be at least 12 characters')
       return
     }
-    const result = await signup(firstName, lastName, email, password, provider)
+    const result = await signup(firstName, lastName, email, password, 'viewer')
     if (result.success) {
       toast.success('Account created successfully!')
       navigate('/dashboard')
@@ -583,63 +608,62 @@ const SignupForm = () => {
 
 export default function Login() {
   const [tab, setTab] = useState('login');
+  const [theme, setTheme] = useState(
+    () => localStorage.getItem('theme') || 'dark'
+  )
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    localStorage.setItem('theme', theme)
+  }, [theme])
+
+  const toggleTheme = () =>
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))
 
   return (
     <>
       <style>{styles}</style>
 
       <div className="auth-root">
+        {/* Theme Toggle Button */}
+        <button
+          onClick={toggleTheme}
+          style={{
+            position: 'absolute', top: 20, right: 20, zIndex: 100,
+            width: 34, height: 34, borderRadius: 8,
+            background: 'var(--surface)', border: '1px solid var(--border)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: 'pointer', color: 'var(--text-dim)',
+            transition: 'all 0.15s ease'
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = 'var(--surface2)'; e.currentTarget.style.color = 'var(--text)' }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'var(--surface)'; e.currentTarget.style.color = 'var(--text-dim)' }}
+          title="Toggle theme"
+        >
+          {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+        </button>
         <div className="bg-layer" />
         <div className="grid-overlay" />
 
         <div className="layout">
-          {/* LEFT PANEL */}
-          <div className="left-panel">
-            <div className="logo-row">
-              <div className="logo-icon">⚡</div>
-              <div>
-                <div className="logo-text">CloudOpt</div>
-                <div className="logo-sub">AI Cost &amp; Security</div>
-              </div>
-            </div>
-
-            <div className="left-content">
-              <div className="tagline">
-                Optimize cloud.<br />
-                <span>Eliminate waste.</span><br />
-                Ship faster.
-              </div>
-              <p className="left-desc">
-                Real-time AI analysis across AWS, GCP, and Azure.<br />
-                Cut costs by up to 40% in the first month.
-              </p>
-
-              <div className="stat-pills">
-                {[
-                  { icon: '💰', cls: 'blue',  label: 'Avg. monthly savings',     value: '$1,240 / mo' },
-                  { icon: '🛡️', cls: 'green', label: 'Security alerts resolved', value: '99.4% auto-remediated' },
-                  { icon: '📊', cls: 'red',   label: 'Providers supported',      value: 'AWS · GCP · Azure' },
-                ].map(({ icon, cls, label, value }) => (
-                  <div className="stat-pill" key={label}>
-                    <div className={`pill-icon ${cls}`}>{icon}</div>
-                    <div>
-                      <div className="pill-label">{label}</div>
-                      <div className="pill-value">{value}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="ai-badge">
-                <div className="ai-dot" />
-                AI Engine Active — 3 providers connected
-              </div>
-            </div>
-          </div>
-
           {/* RIGHT PANEL */}
           <div className="right-panel">
             <div className="auth-card">
+              {/* Centered Brand Logo */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 24 }}>
+                <div style={{
+                  width: 36, height: 36, borderRadius: 9,
+                  background: 'linear-gradient(135deg, var(--accent) 0%, #2563eb 100%)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 16, color: '#fff',
+                  boxShadow: '0 4px 12px var(--accent-glow)'
+                }}>⚡</div>
+                <div style={{ textAlign: 'left' }}>
+                  <div style={{ fontFamily: 'var(--font-head)', fontWeight: 800, fontSize: 18, color: 'var(--text)' }}>CloudOpt</div>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-muted)' }}>AI Cost &amp; Security</div>
+                </div>
+              </div>
+
               {/* Toggle */}
               <div className="toggle-bar">
                 <button

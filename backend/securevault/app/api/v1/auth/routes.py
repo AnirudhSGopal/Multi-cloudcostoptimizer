@@ -28,7 +28,6 @@ def register():
     username = (data.get("username") or "").strip()
     email    = (data.get("email")    or "").strip().lower()
     password = data.get("password")  or ""
-    role_str = (data.get("role") or RoleEnum.VIEWER.value).strip().lower()
 
     # ── Validation ────────────────────────────────────────────────────────
     errors = {}
@@ -38,8 +37,6 @@ def register():
         errors["email"] = "Must be a valid email address."
     if len(password) < 8:
         errors["password"] = "Must be at least 8 characters."
-    if role_str not in RoleEnum._value2member_map_:
-        errors["role"] = f"Must be one of {list(RoleEnum._value2member_map_)}."
     if errors:
         return jsonify({"errors": errors}), 422
 
@@ -51,7 +48,7 @@ def register():
     user = User(
         username=username,
         email=email,
-        role=RoleEnum(role_str),
+        role=RoleEnum.VIEWER,
     )
     user.password = password
     db.session.add(user)
