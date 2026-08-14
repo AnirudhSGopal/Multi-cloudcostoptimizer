@@ -6,6 +6,10 @@ import os
 from datetime import timedelta
 
 
+BASE_DIR = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+DEFAULT_DB_PATH = os.path.join(BASE_DIR, "instance", "securevault.db")
+
+
 class BaseConfig:
     # ── Core ──────────────────────────────────────────────────────────────
     SECRET_KEY: str = os.getenv("SECRET_KEY", "change-me-in-production")
@@ -15,7 +19,7 @@ class BaseConfig:
     # ── Database ──────────────────────────────────────────────────────────
     SQLALCHEMY_DATABASE_URI: str = os.getenv(
         "DATABASE_URL",
-        "sqlite:///securevault.db",
+        f"sqlite:///{DEFAULT_DB_PATH}",
     )
     SQLALCHEMY_TRACK_MODIFICATIONS: bool = False
     SQLALCHEMY_ENGINE_OPTIONS: dict = {

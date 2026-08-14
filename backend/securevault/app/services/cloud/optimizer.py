@@ -205,6 +205,65 @@ def _run_rule_checks(resources: List[Dict[str, Any]], cost_data: List[Dict[str, 
                         "effort": "Medium",
                     })
 
+    # Check 6: Service-level FinOps Recommendations (always active when cost metrics exist)
+    for c in cost_data:
+        p = (c.get("provider") or "aws").lower()
+        srv = c.get("service", "")
+        cost = float(c.get("monthly_cost", 0.0))
+
+        if cost > 0:
+            srv_lower = srv.lower()
+            # Compute Engine / Virtual Machines Committed Use Discounts
+            if any(k in srv_lower for k in ("compute", "ec2", "virtual")):
+                cud_savings = round(cost * 0.37, 2)
+                rec_id = f"rec-service-cud-{p}"
+                if not any(r["id"] == rec_id for r in recs):
+                    recs.append({
+                        "id": rec_id,
+                        "category": "cost",
+                        "priority": "high",
+                        "provider": p,
+                        "title": f"Purchase Committed Use Discounts (CUD) for {srv}",
+                        "description": f"Baseline compute usage on {srv} (${cost:.2f}/mo) can be optimized via 1-year or 3-year commitments.",
+                        "impact_statement": f"Enabling Committed Use Discounts saves up to 37%-57% (${cud_savings:.2f}/mo) on predictable workloads.",
+                        "estimated_monthly_savings": cud_savings,
+                        "effort": "Low",
+                    })
+
+            # Cloud Storage Lifecycle / Archive Tiering
+            elif any(k in srv_lower for k in ("storage", "s3", "blob", "gcs")):
+                stg_savings = round(cost * 0.40, 2)
+                rec_id = f"rec-service-storage-{p}"
+                if not any(r["id"] == rec_id for r in recs):
+                    recs.append({
+                        "id": rec_id,
+                        "category": "storage",
+                        "priority": "medium",
+                        "provider": p,
+                        "title": f"Configure Object Lifecycle Management on {srv}",
+                        "description": f"Automated object lifecycle policies transition infrequently accessed data in {srv} (${cost:.2f}/mo) to cheaper storage tiers.",
+                        "impact_statement": f"Automated tiering reduces object storage costs by ~40% (${stg_savings:.2f}/mo) with zero data loss.",
+                        "estimated_monthly_savings": stg_savings,
+                        "effort": "Low",
+                    })
+
+            # Cloud Networking Egress / Routing Optimization
+            elif any(k in srv_lower for k in ("network", "egress", "cdn", "bandwidth")):
+                net_savings = round(cost * 0.25, 2)
+                rec_id = f"rec-service-net-{p}"
+                if not any(r["id"] == rec_id for r in recs):
+                    recs.append({
+                        "id": rec_id,
+                        "category": "cost",
+                        "priority": "medium",
+                        "provider": p,
+                        "title": f"Optimize Data Egress & Routing in {srv}",
+                        "description": f"Network transfer and egress traffic charges total ${cost:.2f}/mo for {srv}.",
+                        "impact_statement": f"Utilizing Cloud CDN and internal VPC peering endpoints reduces egress costs by ~25% (${net_savings:.2f}/mo).",
+                        "estimated_monthly_savings": net_savings,
+                        "effort": "Medium",
+                    })
+
     return recs
 
 
@@ -228,7 +287,15 @@ def _enhance_with_gemini(
         import google.generativeai as genai
 
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        model = None
+        for m_name in ("models/gemini-2.5-flash", "models/gemini-flash-latest", "gemini-2.5-flash", "gemini-flash-latest"):
+            try:
+                model = genai.GenerativeModel(m_name)
+                break
+            except Exception:
+                continue
+        if not model:
+            model = genai.GenerativeModel("models/gemini-2.5-flash")
 
         # Map savings by rec ID to ensure strict preservation
         savings_map = {r["id"]: r["estimated_monthly_savings"] for r in rule_recs}

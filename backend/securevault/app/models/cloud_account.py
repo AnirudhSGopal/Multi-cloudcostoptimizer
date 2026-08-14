@@ -71,14 +71,33 @@ class CloudAccount(db.Model):
 
     def to_dict(self) -> dict:
         """
-        Safe representation — NEVER includes credentials.
+        Safe representation — includes non-secret configuration metadata without exposing secret keys.
         """
+        safe_meta = {}
+        try:
+            creds = self.get_credentials()
+            if isinstance(creds, dict):
+                if self.provider == CloudProviderEnum.GCP:
+                    safe_meta["project_id"] = creds.get("project_id") or creds.get("gcp_project_id") or ""
+                    safe_meta["bigquery_dataset"] = creds.get("bigquery_dataset") or creds.get("gcp_dataset") or ""
+                    safe_meta["has_service_account_json"] = bool(creds.get("service_account_json") or creds.get("gcp_sa_json"))
+                elif self.provider == CloudProviderEnum.AWS:
+                    safe_meta["access_key_id"] = creds.get("access_key_id") or creds.get("aws_access_key_id") or ""
+                    safe_meta["region"] = creds.get("region") or creds.get("aws_region") or "us-east-1"
+                elif self.provider == CloudProviderEnum.AZURE:
+                    safe_meta["subscription_id"] = creds.get("subscription_id") or creds.get("azure_subscription_id") or ""
+                    safe_meta["tenant_id"] = creds.get("tenant_id") or creds.get("azure_tenant_id") or ""
+                    safe_meta["client_id"] = creds.get("client_id") or creds.get("azure_client_id") or ""
+        except Exception:
+            pass
+
         return {
             "id":             self.id,
             "user_id":        self.user_id,
             "provider":       self.provider.value,
             "account_label":  self.account_label,
             "status":         self.status.value,
+            "details":        safe_meta,
             "last_synced_at": self.last_synced_at.isoformat() if self.last_synced_at else None,
             "created_at":     self.created_at.isoformat() if self.created_at else None,
             "updated_at":     self.updated_at.isoformat() if self.updated_at else None,

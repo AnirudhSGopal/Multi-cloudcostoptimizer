@@ -110,10 +110,27 @@ def add_cloud_account():
     if not credentials or not isinstance(credentials, dict):
         return jsonify({"error": "Credentials object is required"}), 400
 
-    # 1. Validate credentials first with live call
+    provider_enum = CloudProviderEnum(provider_str)
+    account = CloudAccount.query.filter_by(user_id=user_id, provider=provider_enum).first()
+
+    final_creds = {**credentials}
+    if account is not None:
+        try:
+            existing_creds = account.get_credentials()
+            if isinstance(existing_creds, dict):
+                # Merge incoming non-empty fields onto existing credentials
+                merged = {**existing_creds}
+                for k, v in credentials.items():
+                    if v is not None and str(v).strip() != "":
+                        merged[k] = v
+                final_creds = merged
+        except Exception:
+            pass
+
+    # 1. Validate merged credentials with live call
     try:
         service = get_provider_service(provider_str)
-        validation_res = _call_provider_validate(service, provider_str, credentials)
+        validation_res = _call_provider_validate(service, provider_str, final_creds)
 
         if not validation_res.get("success"):
             return jsonify({
@@ -122,10 +139,7 @@ def add_cloud_account():
     except Exception as exc:
         return jsonify({"error": f"Validation failed: {str(exc)}"}), 400
 
-    # 2. Check for existing account for user + provider
-    provider_enum = CloudProviderEnum(provider_str)
-    account = CloudAccount.query.filter_by(user_id=user_id, provider=provider_enum).first()
-
+    # 2. Store or update account record
     if account is None:
         account = CloudAccount(
             user_id=user_id,
@@ -138,8 +152,8 @@ def add_cloud_account():
         account.account_label = account_label
         account.status = AccountStatusEnum.CONNECTED
 
-    # Encrypt and store
-    account.set_credentials(credentials)
+    # Encrypt and store merged credentials
+    account.set_credentials(final_creds)
     db.session.commit()
 
     logger.info("Saved %s cloud account for user %s", provider_str, user_id)

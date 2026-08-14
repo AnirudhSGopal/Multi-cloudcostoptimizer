@@ -37,9 +37,32 @@ function ProviderSection({ providerKey, name, color, fields }) {
   const [testing, setTesting] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
+  useEffect(() => {
+    if (existingAccount?.details) {
+      setValues(prev => {
+        const next = { ...prev }
+        fields.forEach(f => {
+          if (existingAccount.details[f.key] !== undefined) {
+            next[f.key] = existingAccount.details[f.key]
+          }
+        })
+        return next
+      })
+    }
+  }, [existingAccount])
+
   const handleSave = async () => {
-    // Basic validation
-    const missing = fields.filter(f => f.required !== false && !values[f.key]?.trim())
+    // Basic validation — if existing account is already connected and user updates a field, required checks account for saved keys
+    const missing = fields.filter(f => {
+      if (f.required === false) return false
+      if (values[f.key]?.trim()) return false
+      // If service_account_json is already saved on backend
+      if (f.key === 'service_account_json' && existingAccount?.details?.has_service_account_json) return false
+      // If updating an existing account, allow keeping stored secrets
+      if (existingAccount && (f.type === 'password' || f.key.includes('secret') || f.key.includes('json'))) return false
+      return true
+    })
+
     if (missing.length > 0) {
       toast.error(`Please fill in: ${missing.map(m => m.label).join(', ')}`)
       return
@@ -57,12 +80,6 @@ function ProviderSection({ providerKey, name, color, fields }) {
   }
 
   const handleTest = async () => {
-    const missing = fields.filter(f => f.required !== false && !values[f.key]?.trim())
-    if (missing.length > 0) {
-      toast.error(`Please fill in credentials first: ${missing.map(m => m.label).join(', ')}`)
-      return
-    }
-
     setTesting(true)
     const result = await testConnection(providerKey, values)
     setTesting(false)

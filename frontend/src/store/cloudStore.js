@@ -295,6 +295,10 @@ const useCloudStore = create(
         scanTime: state.scanTime,
         repoUrl: state.repoUrl,
         hasScanned: state.hasScanned,
+        accounts: state.accounts,
+        costData: state.costData,
+        resources: state.resources,
+        recommendations: state.recommendations,
       })
     }
   )

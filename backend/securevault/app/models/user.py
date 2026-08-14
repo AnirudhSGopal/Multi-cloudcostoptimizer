@@ -23,7 +23,7 @@ class User(db.Model):
     username   = db.Column(db.String(64),  unique=True, nullable=False, index=True)
     email      = db.Column(db.String(120), unique=True, nullable=False, index=True)
     _password  = db.Column("password_hash", db.String(256), nullable=False)
-    role       = db.Column(db.Enum(RoleEnum), nullable=False, default=RoleEnum.VIEWER)
+    role       = db.Column(db.Enum(RoleEnum, values_callable=lambda obj: [e.value for e in obj]), nullable=False, default=RoleEnum.VIEWER)
     is_active  = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime(timezone=True),
                            default=lambda: datetime.now(timezone.utc))
@@ -61,11 +61,12 @@ class User(db.Model):
 
     # ── Serialisation ─────────────────────────────────────────────────────
     def to_dict(self) -> dict:
+        r_val = self.role.value if isinstance(self.role, RoleEnum) else str(self.role)
         return {
             "id":         self.id,
             "username":   self.username,
             "email":      self.email,
-            "role":       self.role.value,
+            "role":       r_val.lower(),
             "is_active":  self.is_active,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

@@ -15,8 +15,9 @@ const useAuthStore = create((set) => ({
         email,
         password,
       })
-      const { access_token, user } = response.data
+      const { access_token, refresh_token, user } = response.data
       localStorage.setItem('auth_token', access_token)
+      if (refresh_token) localStorage.setItem('refresh_token', refresh_token)
       set({
         user,
         token: access_token,
@@ -48,8 +49,9 @@ const useAuthStore = create((set) => ({
         email,
         password,
       })
-      const { access_token, user } = loginResponse.data
+      const { access_token, refresh_token, user } = loginResponse.data
       localStorage.setItem('auth_token', access_token)
+      if (refresh_token) localStorage.setItem('refresh_token', refresh_token)
       set({
         user,
         token: access_token,
@@ -71,6 +73,7 @@ const useAuthStore = create((set) => ({
 
   logout: () => {
     localStorage.removeItem('auth_token')
+    localStorage.removeItem('refresh_token')
     set({ user: null, token: null, isAuthenticated: false })
   },
 

@@ -235,7 +235,15 @@ def _call_gemini(context: str) -> dict:
         raise ValueError("GEMINI_API_KEY not set")
 
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    model = None
+    for m_name in ("models/gemini-2.5-flash", "models/gemini-flash-latest", "gemini-2.5-flash", "gemini-flash-latest"):
+        try:
+            model = genai.GenerativeModel(m_name)
+            break
+        except Exception:
+            continue
+    if not model:
+        model = genai.GenerativeModel("models/gemini-2.5-flash")
 
     prompt = f"""You are a senior security engineer performing a professional security audit.
 Analyze the provided code or repository content and identify security vulnerabilities, misconfigurations, or missing best practices.

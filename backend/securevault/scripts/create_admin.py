@@ -35,9 +35,9 @@ def seed_admin():
             if user.role != RoleEnum.ADMIN:
                 user.role = RoleEnum.ADMIN
                 db.session.commit()
-                print(f"[✓] Updated existing user '{email}' to ADMIN role.")
+                print(f"[OK] Updated existing user '{email}' to ADMIN role.")
             else:
-                print(f"[·] Admin user '{email}' already exists with ADMIN role.")
+                print(f"[OK] Admin user '{email}' already exists with ADMIN role.")
         else:
             user = User(
                 username=username,
@@ -48,7 +48,7 @@ def seed_admin():
             user.password = password
             db.session.add(user)
             db.session.commit()
-            print(f"[✓] Created admin user: {email} (id={user.id})")
+            print(f"[OK] Created admin user: {email} (id={user.id})")
 
         print(f"    email    = {email}")
         print(f"    username = {user.username}")

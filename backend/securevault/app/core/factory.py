@@ -21,6 +21,10 @@ def create_app(config_name: str = "development") -> Flask:
     limiter.init_app(app)
     _configure_celery(app)
 
+    with app.app_context():
+        from app.models import user, scan, cloud, cloud_account  # noqa: F401
+        db.create_all()
+
     # ── CORS Handling (manual) ────────────────────────────────────────────
     # Initialize CORS with Flask-CORS extension
     cors.init_app(
