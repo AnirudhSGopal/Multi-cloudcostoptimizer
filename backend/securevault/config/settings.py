@@ -4,10 +4,20 @@ All secrets are read from environment variables; sane defaults only for dev.
 """
 import os
 from datetime import timedelta
-
+from dotenv import load_dotenv
 
 BASE_DIR = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
-DEFAULT_DB_PATH = os.path.join(BASE_DIR, "instance", "securevault.db")
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+
+DEFAULT_DB_PATH = os.path.join(BASE_DIR, "instance", "securevault.db").replace("\\", "/")
+
+def _get_database_uri() -> str:
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url or db_url.startswith("sqlite:///"):
+        # Ensure SQLite always uses the absolute path to instance/securevault.db
+        if not db_url or db_url in ("sqlite:///securevault.db", "sqlite:///instance/securevault.db"):
+            return f"sqlite:///{DEFAULT_DB_PATH}"
+    return db_url or f"sqlite:///{DEFAULT_DB_PATH}"
 
 
 class BaseConfig:
@@ -17,10 +27,7 @@ class BaseConfig:
     TESTING: bool = False
 
     # ── Database ──────────────────────────────────────────────────────────
-    SQLALCHEMY_DATABASE_URI: str = os.getenv(
-        "DATABASE_URL",
-        f"sqlite:///{DEFAULT_DB_PATH}",
-    )
+    SQLALCHEMY_DATABASE_URI: str = _get_database_uri()
     SQLALCHEMY_TRACK_MODIFICATIONS: bool = False
     SQLALCHEMY_ENGINE_OPTIONS: dict = {
         "pool_pre_ping": True,

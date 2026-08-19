@@ -22,7 +22,7 @@ auth_bp = Blueprint("auth", __name__)
 # ── Register ──────────────────────────────────────────────────────────────────
 
 @auth_bp.post("/register")
-@limiter.limit("10 per hour")
+@limiter.limit("100 per minute")
 def register():
     data = request.get_json(silent=True) or {}
     username = (data.get("username") or "").strip()
@@ -60,7 +60,7 @@ def register():
 # ── Login ─────────────────────────────────────────────────────────────────────
 
 @auth_bp.post("/login")
-@limiter.limit("20 per hour")
+@limiter.limit("100 per minute")
 def login():
     data = request.get_json(silent=True) or {}
     identifier = (data.get("username") or data.get("email") or "").strip()

@@ -96,6 +96,7 @@ function AppLayout({ theme, toggleTheme }) {
                 </AdminRoute>
               }
             />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </div>
       </div>

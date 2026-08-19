@@ -38,7 +38,7 @@ def validate_credentials(service_account_json: str, project_id: str) -> dict:
 
         # 1. Authenticate credentials with GCP OAuth endpoint
         try:
-            credentials.refresh(Request(timeout=5))
+            credentials.refresh(Request())
         except Exception as auth_err:
             logger.warning("GCP token authentication failed: %s", auth_err)
             return {"success": False, "error": f"GCP Authentication failed: {str(auth_err)}"}
