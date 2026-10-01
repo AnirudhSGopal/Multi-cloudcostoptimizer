@@ -1,4 +1,3 @@
-import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Shield, Coins, Cpu, Activity, ArrowRight, Sun, Moon, Lock, Cloud, Terminal, CheckCircle } from 'lucide-react'
 

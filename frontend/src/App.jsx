@@ -1,19 +1,20 @@
-import { useState, useEffect } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'react-hot-toast'
 
 import useAuthStore from './store/authStore'
-import Login from './pages/Login'
-import LandingPage from './pages/LandingPage'
 import Sidebar from './components/Sidebar'
 import Navbar from './components/Navbar'
-import Dashboard from './pages/Dashboard'
-import CostAnalysis from './pages/CostAnalysis'
-import SecurityAudit from './pages/SecurityAudit'
-import Recommendations from './pages/Recommendations'
-import Settings from './pages/Settings'
-import AdminPanel from './pages/AdminPanel'
+
+const Login = lazy(() => import('./pages/Login'))
+const LandingPage = lazy(() => import('./pages/LandingPage'))
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const CostAnalysis = lazy(() => import('./pages/CostAnalysis'))
+const SecurityAudit = lazy(() => import('./pages/SecurityAudit'))
+const Recommendations = lazy(() => import('./pages/Recommendations'))
+const Settings = lazy(() => import('./pages/Settings'))
+const AdminPanel = lazy(() => import('./pages/AdminPanel'))
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -112,7 +113,7 @@ function App() {
 
   useEffect(() => {
     fetchMe()
-  }, [])
+  }, [fetchMe])
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -125,15 +126,23 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <Router>
-        {isAuthenticated ? (
-          <AppLayout theme={theme} toggleTheme={toggleTheme} />
-        ) : (
-          <Routes>
-            <Route path="/" element={<LandingPage theme={theme} toggleTheme={toggleTheme} />} />
-            <Route path="/login" element={<Login />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        )}
+        <Suspense
+          fallback={
+            <div className="page-content" role="status" aria-live="polite">
+              Loading page…
+            </div>
+          }
+        >
+          {isAuthenticated ? (
+            <AppLayout theme={theme} toggleTheme={toggleTheme} />
+          ) : (
+            <Routes>
+              <Route path="/" element={<LandingPage theme={theme} toggleTheme={toggleTheme} />} />
+              <Route path="/login" element={<Login />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          )}
+        </Suspense>
         <Toaster
           position="top-right"
           toastOptions={{

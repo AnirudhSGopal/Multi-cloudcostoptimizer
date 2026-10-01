@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Users, Cloud, Shield, BarChart3, Activity,
   Search, ChevronLeft, ChevronRight, Trash2, X,
@@ -114,21 +114,21 @@ function StatusBadge({ status, label }) {
 
 function UsersTab() {
   const {
-    users, usersTotal, usersPage, usersPages, usersLoading, usersSearch,
+    users, usersTotal, usersPage, usersPages, usersLoading, usersError, usersSearch,
     fetchUsers, setUsersSearch, setUsersPage, updateUser, deleteUser
   } = useAdminStore()
 
   const [deleteModal, setDeleteModal] = useState(null)
   const [searchInput, setSearchInput] = useState(usersSearch)
 
-  useEffect(() => { fetchUsers() }, [])
+  useEffect(() => { fetchUsers() }, [fetchUsers])
 
-  const handleSearch = useCallback((e) => {
+  const handleSearch = (e) => {
     e.preventDefault()
     setUsersSearch(searchInput)
     setUsersPage(1)
     fetchUsers({ search: searchInput, page: 1 })
-  }, [searchInput])
+  }
 
   const handleRoleChange = async (userId, newRole) => {
     const result = await updateUser(userId, { role: newRole })
@@ -185,6 +185,10 @@ function UsersTab() {
             {usersLoading ? (
               <tr><td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
                 <RefreshCw size={16} className="admin-spinner" /> Loading...
+              </td></tr>
+            ) : usersError ? (
+              <tr><td colSpan={7} role="alert" style={{ textAlign: 'center', padding: 40, color: 'var(--red)' }}>
+                {usersError}
               </td></tr>
             ) : users.length === 0 ? (
               <tr><td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>No users found</td></tr>
@@ -256,11 +260,11 @@ function UsersTab() {
 function CloudAccountsTab() {
   const {
     cloudAccounts, cloudAccountsTotal, cloudAccountsPage, cloudAccountsPages,
-    cloudAccountsLoading, cloudAccountsProvider, cloudAccountsStatus,
+    cloudAccountsLoading, cloudAccountsError, cloudAccountsProvider, cloudAccountsStatus,
     fetchCloudAccounts, setCloudAccountsProvider, setCloudAccountsStatus,
   } = useAdminStore()
 
-  useEffect(() => { fetchCloudAccounts() }, [])
+  useEffect(() => { fetchCloudAccounts() }, [fetchCloudAccounts])
 
   const handleProviderFilter = (p) => {
     setCloudAccountsProvider(p)
@@ -329,6 +333,10 @@ function CloudAccountsTab() {
               <tr><td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
                 <RefreshCw size={16} className="admin-spinner" /> Loading...
               </td></tr>
+            ) : cloudAccountsError ? (
+              <tr><td colSpan={7} role="alert" style={{ textAlign: 'center', padding: 40, color: 'var(--red)' }}>
+                {cloudAccountsError}
+              </td></tr>
             ) : cloudAccounts.length === 0 ? (
               <tr><td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>No cloud accounts found</td></tr>
             ) : cloudAccounts.map(acc => (
@@ -373,11 +381,11 @@ function CloudAccountsTab() {
 
 function ScansTab() {
   const {
-    scans, scansTotal, scansPage, scansPages, scansLoading, scansStatus,
+    scans, scansTotal, scansPage, scansPages, scansLoading, scansError, scansStatus,
     fetchScans, setScansStatus,
   } = useAdminStore()
 
-  useEffect(() => { fetchScans() }, [])
+  useEffect(() => { fetchScans() }, [fetchScans])
 
   const handleStatusFilter = (s) => {
     setScansStatus(s)
@@ -415,7 +423,7 @@ function ScansTab() {
               <th>User</th>
               <th>Repository</th>
               <th>Status</th>
-              <th>Score</th>
+              <th>Overall score</th>
               <th>Findings</th>
               <th>Created</th>
             </tr>
@@ -424,6 +432,10 @@ function ScansTab() {
             {scansLoading ? (
               <tr><td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
                 <RefreshCw size={16} className="admin-spinner" /> Loading...
+              </td></tr>
+            ) : scansError ? (
+              <tr><td colSpan={7} role="alert" style={{ textAlign: 'center', padding: 40, color: 'var(--red)' }}>
+                {scansError}
               </td></tr>
             ) : scans.length === 0 ? (
               <tr><td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>No scans found</td></tr>
@@ -439,16 +451,7 @@ function ScansTab() {
                   {scan.repo_url}
                 </td>
                 <td><StatusBadge status={scan.status} /></td>
-                <td>
-                  {scan.security_score != null ? (
-                    <span style={{
-                      fontFamily: 'JetBrains Mono, monospace', fontSize: 12, fontWeight: 700,
-                      color: scan.security_score >= 85 ? 'var(--green)' : scan.security_score >= 60 ? 'var(--yellow)' : 'var(--red)',
-                    }}>
-                      {scan.security_score}
-                    </span>
-                  ) : <span style={{ color: 'var(--text-muted)' }}>—</span>}
-                </td>
+                <td style={{ color: 'var(--text-muted)' }}>Not calculated</td>
                 <td style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 12, color: 'var(--text-secondary)' }}>
                   {scan.total_findings ?? '—'}
                 </td>
@@ -471,16 +474,22 @@ function ScansTab() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function StatsTab() {
-  const { stats, statsLoading, fetchStats } = useAdminStore()
+  const { stats, statsLoading, statsError, fetchStats } = useAdminStore()
 
-  useEffect(() => { fetchStats() }, [])
+  useEffect(() => { fetchStats() }, [fetchStats])
 
-  if (statsLoading || !stats) {
+  if (statsLoading) {
     return (
       <div className="admin-tab-content" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 200 }}>
         <RefreshCw size={20} className="admin-spinner" color="var(--text-muted)" />
       </div>
     )
+  }
+  if (statsError) {
+    return <p className="admin-tab-content" role="alert" style={{ color: 'var(--red)' }}>{statsError}</p>
+  }
+  if (!stats) {
+    return <p className="admin-tab-content" role="status">No platform statistics are available.</p>
   }
 
   const cards = [
@@ -558,16 +567,22 @@ function StatsTab() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function HealthTab() {
-  const { health, healthLoading, fetchHealth } = useAdminStore()
+  const { health, healthLoading, healthError, fetchHealth } = useAdminStore()
 
-  useEffect(() => { fetchHealth() }, [])
+  useEffect(() => { fetchHealth() }, [fetchHealth])
 
-  if (healthLoading || !health) {
+  if (healthLoading) {
     return (
       <div className="admin-tab-content" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 200 }}>
         <RefreshCw size={20} className="admin-spinner" color="var(--text-muted)" />
       </div>
     )
+  }
+  if (healthError) {
+    return <p className="admin-tab-content" role="alert" style={{ color: 'var(--red)' }}>{healthError}</p>
+  }
+  if (!health) {
+    return <p className="admin-tab-content" role="status">System health data is unavailable.</p>
   }
 
   const checkIcons = {

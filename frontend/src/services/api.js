@@ -52,7 +52,10 @@ api.interceptors.response.use(
             return api(originalRequest)
           }
         } catch (refreshError) {
-          console.error('Token refresh failed:', refreshError)
+          console.warn(
+            'Token refresh failed; status:',
+            refreshError.response?.status || 'network error'
+          )
           localStorage.removeItem('auth_token')
           localStorage.removeItem('refresh_token')
           window.location.href = '/login'

@@ -4,7 +4,7 @@ from app.core.extensions import db
 from app.models.user import User, RoleEnum
 from app.models.cloud_account import CloudAccount, AccountStatusEnum
 from app.models.cloud import CloudMetric, CloudProviderEnum
-from app.models.scan import ScanJob, ScanStatusEnum
+from app.models.scan import ScanJob, ScanResult, ScanStatusEnum
 
 
 import os
@@ -124,6 +124,29 @@ def test_admin_routes(client, app, admin_user, viewer_user):
     assert "checks" in health
 
 
+def test_admin_scan_list_returns_null_for_unscored_result(client, app, admin_user):
+    with app.app_context():
+        job = ScanJob(
+            repo_url="https://github.com/example/repo",
+            requested_by=admin_user,
+            status=ScanStatusEnum.COMPLETED,
+        )
+        db.session.add(job)
+        db.session.flush()
+        db.session.add(ScanResult(job_id=job.id, security_score=100, total_findings=0))
+        db.session.commit()
+
+    token = get_token(client, "admin_test@cloudopt.ai", "adminpass123")
+    response = client.get(
+        "/api/v1/admin/scans",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    scan = response.get_json()["scans"][0]
+    assert scan["security_score"] is None
+
+
 def test_user_deletion_cascade(client, app, admin_user):
     with app.app_context():
         target = User(username="target_user", email="target@cloudopt.ai", role=RoleEnum.VIEWER)
@@ -156,7 +179,7 @@ def test_user_deletion_cascade(client, app, admin_user):
     assert res.status_code == 200
 
     with app.app_context():
-        assert User.query.get(target_id) is None
-        assert CloudAccount.query.get(acc_id) is None
-        assert ScanJob.query.get(scan_id) is None
-        assert CloudMetric.query.get(metric_id) is None
+        assert db.session.get(User, target_id) is None
+        assert db.session.get(CloudAccount, acc_id) is None
+        assert db.session.get(ScanJob, scan_id) is None
+        assert db.session.get(CloudMetric, metric_id) is None

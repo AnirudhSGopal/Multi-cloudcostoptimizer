@@ -3,55 +3,6 @@ import { persist } from 'zustand/middleware'
 import apiClient from '../services/api'
 import cloudService from '../services/cloudService'
 
-export const ALERTS = [
-  {
-    id: 'azure-public-blob',
-    type: 'critical',
-    provider: 'Azure',
-    title: 'Public blob access detected',
-    impact: 'Unauthenticated public read access to prod-assets container',
-    resource: 'storageaccount/prod-assets',
-    owner: 'Platform Team',
-    time: '2m ago',
-    fixSteps: [
-      'Go to Azure Portal → Storage Accounts',
-      'Select prod-assets → Configuration',
-      'Set "Allow Blob Public Access" to Disabled',
-      'Save and verify with az cli: az storage container set-permission',
-    ],
-  },
-  {
-    id: 'gcp-uniform-access',
-    type: 'warning',
-    provider: 'GCP',
-    title: 'Uniform bucket access disabled',
-    impact: 'Inconsistent IAM enforcement — legacy ACLs active on 3 buckets',
-    resource: 'gs://us-central1 (3 buckets)',
-    owner: 'Data Engineering',
-    time: '18m ago',
-    fixSteps: [
-      'Run: gsutil uniformbucketlevelaccess set on gs://BUCKET_NAME',
-      'Repeat for all 3 affected buckets in us-central1',
-      'Verify: gsutil uniformbucketlevelaccess get gs://BUCKET_NAME',
-    ],
-  },
-  {
-    id: 'aws-cloudtrail',
-    type: 'info',
-    provider: 'AWS',
-    title: 'CloudTrail multi-region logging incomplete',
-    impact: 'API activity in non-primary regions not captured',
-    resource: 'CloudTrail / us-east-1',
-    owner: 'Security Team',
-    time: '1h ago',
-    fixSteps: [
-      'Open AWS Console → CloudTrail',
-      'Edit trail → Enable "Apply to all regions"',
-      'Confirm S3 bucket has capacity for increased log volume',
-    ],
-  },
-]
-
 function toAlertShape(a) {
   const type = a.severity === 'critical' ? 'critical' : a.severity === 'warning' ? 'warning' : 'info'
   
@@ -102,10 +53,11 @@ const useCloudStore = create(
       selectedProvider: 'all',
       dateRange: '30d',
       isLoading: false,
-      securityScore: 74,
-      alerts: ALERTS,
+      securityScore: null,
+      alerts: [],
       dismissedAlerts: [],
       scanOverall: null,
+      scanCoverage: null,
       scanCompliance: null,
       scanTime: null,
       repoUrl: '',
@@ -118,9 +70,11 @@ const useCloudStore = create(
 
       // Multi-Cloud Account & Cost Optimization state
       accounts: [],
+      accountsError: '',
       costData: [],
       resources: [],
       recommendations: [],
+      dailyTrend: [],
       costLoading: false,
       accountsLoading: false,
       costError: '',
@@ -134,15 +88,18 @@ const useCloudStore = create(
 
       // ── Cloud Accounts & Sync Actions ──────────────────────────────────
       fetchAccounts: async () => {
-        set({ accountsLoading: true })
+        set({ accountsLoading: true, accountsError: '' })
         try {
           const { data } = await cloudService.getAccounts()
           const accountsList = data.accounts || []
-          set({ accounts: accountsList, accountsLoading: false })
+          set({ accounts: accountsList, accountsLoading: false, accountsError: '' })
           return accountsList
         } catch (e) {
-          console.error("Failed to fetch cloud accounts:", e)
-          set({ accountsLoading: false })
+          console.warn("Failed to fetch cloud accounts")
+          set({
+            accountsLoading: false,
+            accountsError: e.response?.data?.error || 'Unable to load cloud accounts.',
+          })
           return []
         }
       },
@@ -188,7 +145,7 @@ const useCloudStore = create(
       syncAllAccounts: async () => {
         const { accounts } = get()
         if (!accounts || accounts.length === 0) {
-          set({ costData: [], resources: [], recommendations: [], costError: '' })
+          set({ costData: [], resources: [], recommendations: [], dailyTrend: [], costError: '' })
           return
         }
 
@@ -197,6 +154,7 @@ const useCloudStore = create(
         let aggregatedCost = []
         let aggregatedResources = []
         let aggregatedRecs = []
+        let latestTrend = []
         let errors = []
 
         for (const acc of accounts) {
@@ -205,6 +163,7 @@ const useCloudStore = create(
             if (data.cost_data) aggregatedCost = [...aggregatedCost, ...data.cost_data]
             if (data.resources) aggregatedResources = [...aggregatedResources, ...data.resources]
             if (data.recommendations) aggregatedRecs = [...aggregatedRecs, ...data.recommendations]
+            if (data.daily_trend && data.daily_trend.length > 0) latestTrend = data.daily_trend
             if (data.cost_error) errors.push(`${acc.provider.toUpperCase()}: ${data.cost_error}`)
           } catch (e) {
             const errStr = e.response?.data?.error || e.message
@@ -212,19 +171,23 @@ const useCloudStore = create(
           }
         }
 
+        const isDemo = accounts.some(a => a.account_label?.toLowerCase().includes('demo') || (a.storage_size_gb !== undefined && a.storage_size_gb < 100))
+
         set({
           costData: aggregatedCost,
           resources: aggregatedResources,
           recommendations: aggregatedRecs,
-          costError: errors.join(" | "),
+          dailyTrend: latestTrend,
+          costError: isDemo ? '' : errors.join(" | "),
           costLoading: false,
         })
       },
 
-      updateScanResults: (newAlerts, score, overall, compliance, scanTime, repoUrl) => set({
+      updateScanResults: (newAlerts, score, overall, coverage, compliance, scanTime, repoUrl) => set({
         alerts: newAlerts,
         securityScore: score,
         scanOverall: overall,
+        scanCoverage: coverage,
         scanCompliance: compliance,
         scanTime: scanTime,
         repoUrl: repoUrl,
@@ -233,9 +196,10 @@ const useCloudStore = create(
       }),
 
       resetScan: () => set({
-        alerts: ALERTS,
-        securityScore: 74,
+        alerts: [],
+        securityScore: null,
         scanOverall: null,
+        scanCoverage: null,
         scanCompliance: null,
         scanTime: null,
         repoUrl: '',
@@ -249,26 +213,108 @@ const useCloudStore = create(
       startBackgroundScan: async (url, filesWithContent) => {
         set({ scanning: true, progress: 20, scanError: '' })
         try {
-          set({ progress: 50 })
-          
-          const { data } = await apiClient.post('/api/audit', {
-            repoUrl: url || null,
-            files: filesWithContent,
-          }, { timeout: 300000 })
+          let nextOverall
+          let nextCoverage = null
+          let nextScanAlerts
+          let nextCompliance
+
+          const applyAuditResult = (data, executionMode) => {
+            nextOverall = {
+              score: null,
+              status: 'Partial assessment',
+              totalFindings: data.alerts?.length ?? 0,
+              filesScanned: data.files_scanned ?? filesWithContent.length,
+            }
+            nextCoverage = {
+              ...(data.coverage ?? {}),
+              ...(executionMode ? { execution_mode: executionMode } : {}),
+            }
+            nextScanAlerts = data.alerts || []
+            nextCompliance = data.compliance ? data.compliance.map(toComplianceRow) : null
+          }
+
+          if (url && filesWithContent.length === 0) {
+            let started
+            try {
+              const response = await apiClient.post(
+                '/api/v1/scan/start',
+                { repo_url: url, gemini_review: true },
+              )
+              started = response.data
+            } catch (error) {
+              const queueError = error?.response?.data?.error
+              const queueUnavailable =
+                error?.response?.status === 503
+                && typeof queueError === 'string'
+                && queueError.startsWith('Scan queue unavailable.')
+              if (!queueUnavailable) throw error
+
+              set({ progress: 50 })
+              const { data } = await apiClient.post('/api/audit', {
+                repoUrl: url,
+                files: [],
+                gemini_review: true,
+              }, { timeout: 300000 })
+              applyAuditResult(data, 'synchronous_fallback')
+            }
+
+            if (started) {
+              const scanId = started.scan.id
+              let data
+              const deadline = Date.now() + 5 * 60 * 1000
+
+              while (Date.now() < deadline) {
+                await new Promise((resolve) => window.setTimeout(resolve, 1500))
+                const { data: status } = await apiClient.get(`/api/v1/scan/${scanId}`)
+                if (status.scan.status === 'completed') {
+                  data = status
+                  break
+                }
+                if (status.scan.status === 'failed' || status.scan.status === 'cancelled') {
+                  throw new Error(status.scan.error_msg || `Scan ${status.scan.status}.`)
+                }
+                set({ progress: Math.min(get().progress + 5, 90) })
+              }
+
+              if (!data) throw new Error('Scan timed out while waiting for results.')
+              nextCoverage = data.result.coverage ?? null
+              nextOverall = {
+                score: null,
+                status: 'Partial assessment',
+                totalFindings: data.result.total_findings,
+                filesScanned: data.result.files_scanned,
+                coverage: nextCoverage,
+              }
+              nextScanAlerts = data.findings.map((finding) => ({
+                id: finding.id,
+                severity: ['critical', 'high'].includes(finding.severity)
+                  ? 'critical'
+                  : ['medium', 'low'].includes(finding.severity) ? 'warning' : 'info',
+                message: [finding.title, finding.description].filter(Boolean).join(': '),
+                location: finding.file_path
+                  ? `${finding.file_path}${finding.line_number ? `:${finding.line_number}` : ''}`
+                  : 'Repository',
+              }))
+              nextCompliance = null
+            }
+          } else {
+            set({ progress: 50 })
+            const { data } = await apiClient.post('/api/audit', {
+              repoUrl: url || null,
+              files: filesWithContent,
+            }, { timeout: 300000 })
+            applyAuditResult(data)
+          }
 
           set({ progress: 90 })
 
-          const nextOverall = data.overall ?? null
-          const nextScanAlerts = data.alerts ? data.alerts : []
-          const nextCompliance = data.compliance ? data.compliance.map(toComplianceRow) : null
-          const nextScanTime = new Date()
-
           set({
             alerts: nextScanAlerts.map(toAlertShape),
-            securityScore: nextOverall?.score ?? 74,
+            securityScore: nextOverall?.score ?? null,
             scanOverall: nextOverall,
+            scanCoverage: nextCoverage,
             scanCompliance: nextCompliance,
-            scanTime: nextScanTime.toISOString(),
+            scanTime: new Date().toISOString(),
             repoUrl: url,
             hasScanned: true,
             dismissedAlerts: [],
@@ -276,14 +322,29 @@ const useCloudStore = create(
             progress: 0
           })
         } catch (e) {
-          const detail = e?.response?.data?.detail || e.message || 'Audit failed'
+          const detail = e?.response?.data?.error
+            || e?.response?.data?.detail
+            || e.message
+            || 'Audit failed'
           set({ scanError: detail, scanning: false, progress: 0 })
-          console.error(e)
+          console.warn('Security audit request failed')
         }
       }
     }),
     {
       name: 'cloudopt-state-store',
+      version: 3,
+      migrate: (persistedState) => ({
+        ...persistedState,
+        alerts: [],
+        dismissedAlerts: [],
+        securityScore: null,
+        scanOverall: null,
+        scanCoverage: null,
+        scanCompliance: null,
+        scanTime: null,
+        hasScanned: false,
+      }),
       partialize: (state) => ({
         selectedProvider: state.selectedProvider,
         dateRange: state.dateRange,
@@ -291,6 +352,7 @@ const useCloudStore = create(
         alerts: state.alerts,
         dismissedAlerts: state.dismissedAlerts,
         scanOverall: state.scanOverall,
+        scanCoverage: state.scanCoverage,
         scanCompliance: state.scanCompliance,
         scanTime: state.scanTime,
         repoUrl: state.repoUrl,

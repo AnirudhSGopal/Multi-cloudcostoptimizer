@@ -48,8 +48,11 @@ class ScanJob(db.Model):
     status       = db.Column(db.Enum(ScanStatusEnum),
                              nullable=False, default=ScanStatusEnum.PENDING, index=True)
     error_msg    = db.Column(db.Text, nullable=True)
+    gemini_review_requested = db.Column(
+        db.Boolean, nullable=False, default=False, server_default=db.false()
+    )
     requested_by = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"),
-                             nullable=True)
+                             nullable=True, index=True)
     created_at   = db.Column(db.DateTime(timezone=True),
                              default=lambda: datetime.now(timezone.utc))
     started_at   = db.Column(db.DateTime(timezone=True), nullable=True)
@@ -70,6 +73,7 @@ class ScanJob(db.Model):
             "branch":        self.branch,
             "status":        self.status.value,
             "error_msg":     self.error_msg,
+            "gemini_review_requested": self.gemini_review_requested,
             "requested_by":  self.requested_by,
             "created_at":    self.created_at.isoformat() if self.created_at else None,
             "started_at":    self.started_at.isoformat() if self.started_at else None,
@@ -86,7 +90,8 @@ class ScanResult(db.Model):
     id              = db.Column(db.Integer, primary_key=True)
     job_id          = db.Column(db.Integer, db.ForeignKey("scan_jobs.id", ondelete="CASCADE"),
                                 unique=True, nullable=False)
-    security_score  = db.Column(db.Float, nullable=False, default=100.0)   # 0–100
+    security_score  = db.Column(db.Float, nullable=True, default=None)
+    coverage        = db.Column(db.JSON, nullable=False, default=dict)
     total_findings  = db.Column(db.Integer, nullable=False, default=0)
     critical_count  = db.Column(db.Integer, nullable=False, default=0)
     high_count      = db.Column(db.Integer, nullable=False, default=0)
@@ -105,7 +110,8 @@ class ScanResult(db.Model):
         return {
             "id":              self.id,
             "job_id":          self.job_id,
-            "security_score":  round(self.security_score, 2),
+            "security_score": None,
+            "coverage":        self.coverage or {},
             "total_findings":  self.total_findings,
             "critical_count":  self.critical_count,
             "high_count":      self.high_count,
@@ -119,7 +125,7 @@ class ScanResult(db.Model):
         }
 
     def __repr__(self):
-        return f"<ScanResult job={self.job_id} score={self.security_score}>"
+        return f"<ScanResult job={self.job_id} findings={self.total_findings}>"
 
 
 class Vulnerability(db.Model):

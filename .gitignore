@@ -19,6 +19,9 @@ instance/
 .env
 .env.local
 .env.*.local
+**/.env
+**/.env.*
+!**/.env.example
 
 # Node
 node_modules/

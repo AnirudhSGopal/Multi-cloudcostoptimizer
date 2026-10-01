@@ -7,9 +7,9 @@ import GCPCard from '../components/cloud/GCPCard'
 import AzureCard from '../components/cloud/AzureCard'
 import CostChart from '../components/charts/CostChart'
 import StorageChart from '../components/charts/StorageChart'
-import SecurityGauge from '../components/charts/SecurityGauge'
 import useCloudStore from '../store/cloudStore'
 import Button from '../components/common/Button'
+import { STORAGE_CONFIG } from '../config/storageConfig'
 
 export default function Dashboard() {
   const navigate = useNavigate()
@@ -17,12 +17,14 @@ export default function Dashboard() {
     alerts,
     dismissedAlerts,
     dismissAlert,
-    securityScore,
     accounts,
+    accountsLoading,
+    accountsError,
     costData,
     resources,
     recommendations,
     costLoading,
+    costError,
     fetchAccounts,
     syncAllAccounts,
   } = useCloudStore()
@@ -94,7 +96,13 @@ export default function Dashboard() {
     <div className="page-content">
 
       {/* ── Empty State Banner if no accounts ── */}
-      {accounts.length === 0 && (
+      {(accountsError || costError) && (
+        <div role="alert" className="alert-banner" style={{ color: 'var(--red)' }}>
+          {accountsError || costError}
+        </div>
+      )}
+
+      {!accountsLoading && !accountsError && accounts.length === 0 && (
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16,
           padding: '16px 20px',
@@ -116,6 +124,12 @@ export default function Dashboard() {
           <Button onClick={() => navigate('/settings')} icon={ArrowRight}>
             Connect Provider
           </Button>
+        </div>
+      )}
+
+      {accountsLoading && (
+        <div role="status" aria-live="polite" style={{ color: 'var(--text-muted)', marginTop: 12 }}>
+          Loading cloud accounts…
         </div>
       )}
 
@@ -209,19 +223,19 @@ export default function Dashboard() {
         <div className="providers-grid">
           <AWSCard
             cost={awsCost}
-            storage={`${resources.filter(r => r.provider === 'aws').length} resources`}
+            storage={`${accounts.find(a => a.provider === 'aws')?.storage_size_gb || STORAGE_CONFIG.AWS.sizeGb} GB · ${STORAGE_CONFIG.AWS.shareLabel} (${resources.filter(r => r.provider === 'aws').length} resources)`}
             connected={hasAWS}
             onClick={() => navigate('/cost-analysis')}
           />
           <GCPCard
             cost={gcpCost}
-            storage={`${resources.filter(r => r.provider === 'gcp').length} resources`}
+            storage={`${accounts.find(a => a.provider === 'gcp')?.storage_size_gb || STORAGE_CONFIG.GCP.sizeGb} GB · ${STORAGE_CONFIG.GCP.shareLabel} (${resources.filter(r => r.provider === 'gcp').length} resources)`}
             connected={hasGCP}
             onClick={() => navigate('/cost-analysis')}
           />
           <AzureCard
             cost={azureCost}
-            storage={`${resources.filter(r => r.provider === 'azure').length} resources`}
+            storage={`${accounts.find(a => a.provider === 'azure')?.storage_size_gb || STORAGE_CONFIG.Azure.sizeGb} GB · ${STORAGE_CONFIG.Azure.shareLabel} (${resources.filter(r => r.provider === 'azure').length} resources)`}
             connected={hasAzure}
             onClick={() => navigate('/cost-analysis')}
           />
@@ -243,25 +257,10 @@ export default function Dashboard() {
             <StorageChart />
           </div>
           <div className="card chart-card">
-            <div className="card__title">Security score</div>
-            <SecurityGauge score={securityScore} />
-            <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {[
-                { label: 'Encryption', val: 92, color: 'var(--green)' },
-                { label: 'IAM',        val: 68, color: 'var(--yellow)' },
-                { label: 'Logging',    val: 55, color: 'var(--yellow)' },
-              ].map(({ label, val, color }) => (
-                <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 }}>
-                  <span style={{ color: 'var(--text-muted)', width: 64 }}>{label}</span>
-                  <div style={{ flex: 1, height: 3, background: 'var(--border-mid)', borderRadius: 99 }}>
-                    <div style={{ width: `${val}%`, height: '100%', background: color, borderRadius: 99 }} />
-                  </div>
-                  <span style={{ color, fontFamily: 'JetBrains Mono, monospace', fontSize: 10.5, width: 28, textAlign: 'right' }}>
-                    {val}%
-                  </span>
-                </div>
-              ))}
-            </div>
+            <div className="card__title">Security assessment</div>
+            <p style={{ marginTop: 12, color: 'var(--text-muted)', fontSize: 12 }}>
+              Repository scans report findings and coverage. An overall security score is not calculated.
+            </p>
           </div>
         </div>
       </div>

@@ -13,7 +13,7 @@ const CAT_ICON = {
 const FILTERS = ['all', 'cost', 'security', 'storage']
 
 export default function Recommendations() {
-  const { recommendations, accounts, fetchAccounts, syncAllAccounts, costLoading } = useCloudStore()
+  const { recommendations, accounts, accountsLoading, fetchAccounts, syncAllAccounts, costLoading, costError, accountsError } = useCloudStore()
   const [filter, setFilter] = useState('all')
   const navigate = useNavigate()
 
@@ -21,8 +21,8 @@ export default function Recommendations() {
     fetchAccounts().then(() => syncAllAccounts())
   }, [fetchAccounts, syncAllAccounts])
 
-  const normalizedRecs = (recommendations || []).map(r => ({
-    id: r.id || Math.random().toString(),
+  const normalizedRecs = (recommendations || []).map((r, index) => ({
+    id: r.id ?? `${r.provider || 'cloud'}-${r.category || 'recommendation'}-${index}`,
     category: r.category || 'cost',
     provider: (r.provider || 'aws').toUpperCase(),
     priority: r.priority || 'medium',
@@ -44,7 +44,7 @@ export default function Recommendations() {
     <div className="page-content">
 
       {/* Empty State Banner if no accounts connected */}
-      {accounts.length === 0 && (
+      {!costLoading && !accountsLoading && !accountsError && accounts.length === 0 && (
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16,
           padding: '16px 20px',
@@ -67,6 +67,17 @@ export default function Recommendations() {
             Connect Provider
           </Button>
         </div>
+      )}
+
+      {(accountsError || costError) && (
+        <div role="alert" className="alert-banner" style={{ color: 'var(--red)' }}>
+          {accountsError || costError}
+        </div>
+      )}
+      {(accountsLoading || costLoading) && (
+        <p role="status" aria-live="polite" style={{ color: 'var(--text-muted)' }}>
+          Loading cloud recommendations…
+        </p>
       )}
 
       {/* Summary Cards */}

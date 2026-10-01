@@ -12,9 +12,10 @@ Usage:
 """
 from functools import wraps
 
-from flask import jsonify
+from flask import abort, jsonify
 from flask_jwt_extended import get_jwt_identity
 
+from app.core.extensions import db
 from app.models.user import User, RoleEnum
 
 
@@ -78,5 +79,8 @@ def admin_required(fn):
 
 def _get_current_user() -> User | None:
     """Return the User object from the JWT identity claim."""
-    user_id = get_jwt_identity()
-    return User.query.get(user_id)
+    try:
+        user_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        abort(401)
+    return db.session.get(User, user_id)

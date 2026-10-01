@@ -23,7 +23,7 @@ import os
 import logging
 from datetime import datetime, timezone
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import jwt_required
 from sqlalchemy import func
 
@@ -95,7 +95,7 @@ def get_user(user_id):
     GET /api/v1/admin/users/<id>
     Single user detail with cloud_accounts_count and scans_count.
     """
-    user = User.query.get_or_404(user_id)
+    user = db.get_or_404(User, user_id)
     data = user.to_dict()
     data["cloud_accounts_count"] = CloudAccount.query.filter_by(user_id=user.id).count()
     data["scans_count"] = ScanJob.query.filter_by(requested_by=user.id).count()
@@ -111,7 +111,7 @@ def update_user(user_id):
     Update role or is_active.
     Body: { "role": "admin"|"analyst"|"viewer", "is_active": true|false }
     """
-    user = User.query.get_or_404(user_id)
+    user = db.get_or_404(User, user_id)
     data = request.get_json(silent=True) or {}
 
     if "role" in data:
@@ -139,11 +139,11 @@ def delete_user(user_id):
     if request.args.get("confirm", "").lower() != "true":
         return jsonify({"error": "Add ?confirm=true to confirm deletion."}), 400
 
-    user = User.query.get_or_404(user_id)
+    user = db.get_or_404(User, user_id)
 
     # Prevent self-deletion
     from flask_jwt_extended import get_jwt_identity
-    current_id = get_jwt_identity()
+    current_id = int(get_jwt_identity())
     if user.id == current_id:
         return jsonify({"error": "Cannot delete your own account."}), 400
 
@@ -162,7 +162,7 @@ def promote_user(user_id):
     POST /api/v1/admin/users/<id>/promote
     Body: { "role": "admin"|"analyst"|"viewer" }
     """
-    user = User.query.get_or_404(user_id)
+    user = db.get_or_404(User, user_id)
     data = request.get_json(silent=True) or {}
     role_str = str(data.get("role", "")).strip().lower()
 
@@ -209,7 +209,7 @@ def list_all_cloud_accounts():
     for acc in pagination.items:
         d = acc.to_dict()
         # Enrich with owner username
-        owner = User.query.get(acc.user_id)
+        owner = db.session.get(User, acc.user_id)
         d["username"] = owner.username if owner else "unknown"
         accounts.append(d)
 
@@ -249,12 +249,12 @@ def list_all_scans():
         d = scan.to_dict()
         # Enrich with owner info and score
         if scan.requested_by:
-            owner = User.query.get(scan.requested_by)
+            owner = db.session.get(User, scan.requested_by)
             d["username"] = owner.username if owner else "unknown"
         else:
             d["username"] = "unknown"
         if scan.result:
-            d["security_score"] = round(scan.result.security_score, 2)
+            d["security_score"] = None
             d["total_findings"] = scan.result.total_findings
         else:
             d["security_score"] = None
@@ -343,18 +343,25 @@ def system_health():
 
     # 2. Gemini API reachability
     try:
-        import google.generativeai as genai
+        from google import genai
+        from google.genai import types
+
         api_key = os.getenv("GEMINI_API_KEY")
         if api_key:
-            genai.configure(api_key=api_key)
-            # Just list models as a lightweight check
-            models = genai.list_models()
-            model_count = sum(1 for _ in models)
-            checks["gemini_api"] = {"status": "healthy", "message": f"Reachable ({model_count} models available)"}
+            timeout = float(current_app.config.get("GEMINI_REQUEST_TIMEOUT_SECONDS", 10))
+            with genai.Client(
+                api_key=api_key,
+                http_options=types.HttpOptions(timeout=timeout),
+            ) as client:
+                next(iter(client.models.list()), None)
+            checks["gemini_api"] = {"status": "healthy", "message": "Reachable"}
         else:
             checks["gemini_api"] = {"status": "unhealthy", "message": "GEMINI_API_KEY not set"}
-    except Exception as e:
-        checks["gemini_api"] = {"status": "unhealthy", "message": str(e)}
+    except Exception as exc:
+        checks["gemini_api"] = {
+            "status": "unhealthy",
+            "message": f"Provider check failed ({type(exc).__name__})",
+        }
 
     # 3. CLOUD_ENCRYPTION_KEY
     encryption_key = os.getenv("CLOUD_ENCRYPTION_KEY")

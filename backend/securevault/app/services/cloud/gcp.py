@@ -38,10 +38,13 @@ def validate_credentials(service_account_json: str, project_id: str) -> dict:
 
         # 1. Authenticate credentials with GCP OAuth endpoint
         try:
-            credentials.refresh(Request())
+            credentials.refresh(Request(timeout=10))
         except Exception as auth_err:
-            logger.warning("GCP token authentication failed: %s", auth_err)
-            return {"success": False, "error": f"GCP Authentication failed: {str(auth_err)}"}
+            logger.warning(
+                "GCP token authentication failed; exception_type=%s",
+                type(auth_err).__name__,
+            )
+            return {"success": False, "error": "GCP authentication failed."}
 
         warnings = []
 
@@ -55,13 +58,19 @@ def validate_credentials(service_account_json: str, project_id: str) -> dict:
                 warn_text = (
                     f"Missing 'storage.buckets.list' permission on project '{project_id}'. "
                     f"Assign 'Storage Object Viewer' (roles/storage.objectViewer) or 'Viewer' (roles/viewer) "
-                    f"to {client_email} in GCP IAM Console to enable Cloud Storage discovery."
+                    "to the service account in GCP IAM Console to enable Cloud Storage discovery."
                 )
-                logger.warning("GCP validation warning for %s: %s", client_email, warn_text)
+                logger.warning(
+                    "GCP storage permission check failed; exception_type=%s",
+                    type(exc).__name__,
+                )
                 warnings.append(warn_text)
             else:
-                logger.warning("Storage check notice for %s: %s", client_email, err_msg)
-                warnings.append(f"Storage check notice: {err_msg}")
+                logger.warning(
+                    "GCP storage check failed; exception_type=%s",
+                    type(exc).__name__,
+                )
+                warnings.append("Cloud Storage discovery is unavailable.")
 
         return {
             "success": True,
@@ -74,8 +83,11 @@ def validate_credentials(service_account_json: str, project_id: str) -> dict:
     except json.JSONDecodeError:
         return {"success": False, "error": "Invalid GCP Service Account JSON format."}
     except Exception as exc:
-        logger.warning("GCP credential validation failed: %s", exc)
-        return {"success": False, "error": f"GCP validation failed: {str(exc)}"}
+        logger.warning(
+            "GCP credential validation failed; exception_type=%s",
+            type(exc).__name__,
+        )
+        return {"success": False, "error": "GCP credential validation failed."}
 
 
 
@@ -162,10 +174,12 @@ def get_cost_data(service_account_json: str, project_id: str, bigquery_dataset: 
 
     try:
         from google.oauth2 import service_account
+        from google.auth.transport.requests import Request
         from google.cloud import bigquery
 
         creds_dict = json.loads(service_account_json) if isinstance(service_account_json, str) else service_account_json
         credentials = service_account.Credentials.from_service_account_info(creds_dict)
+        credentials.refresh(Request(timeout=10))
         client = bigquery.Client(project=project_id, credentials=credentials)
 
         # Build query for export table
@@ -182,7 +196,7 @@ def get_cost_data(service_account_json: str, project_id: str, bigquery_dataset: 
             ORDER BY total_cost DESC
         """
 
-        query_job = client.query(query)
+        query_job = client.query(query, timeout=10.0)
         results = query_job.result(timeout=10.0)
 
         normalized_costs = []
@@ -199,8 +213,10 @@ def get_cost_data(service_account_json: str, project_id: str, bigquery_dataset: 
 
         return {"success": True, "data": normalized_costs}
     except Exception as exc:
-        err_msg = str(exc)
-        logger.warning("GCP BigQuery billing query failed: %s — falling back to resource cost estimation.", err_msg)
+        logger.warning(
+            "GCP BigQuery billing query failed; exception_type=%s; using estimates.",
+            type(exc).__name__,
+        )
         estimated_costs = _estimate_costs_from_resources(service_account_json, project_id)
         return {"success": True, "data": estimated_costs, "is_estimated": True}
 
@@ -212,12 +228,16 @@ def get_resource_metadata(service_account_json: str, project_id: str) -> dict:
     """
     try:
         from google.oauth2 import service_account
+        from google.auth.transport.requests import Request
         from google.cloud import storage, compute_v1
 
         creds_dict = json.loads(service_account_json) if isinstance(service_account_json, str) else service_account_json
         credentials = service_account.Credentials.from_service_account_info(creds_dict)
+        credentials.refresh(Request(timeout=10))
 
         resources = []
+        warnings = []
+        discovery_failures = 0
 
         # 1. Compute Instances
         try:
@@ -241,7 +261,12 @@ def get_resource_metadata(service_account_json: str, project_id: str) -> dict:
                             }
                         })
         except Exception as exc:
-            logger.warning("Failed to list GCP instances: %s", exc)
+            discovery_failures += 1
+            warnings.append("Compute Engine discovery unavailable.")
+            logger.warning(
+                "Failed to list GCP instances; exception_type=%s",
+                type(exc).__name__,
+            )
 
         # 2. Cloud Storage Buckets
         try:
@@ -261,9 +286,22 @@ def get_resource_metadata(service_account_json: str, project_id: str) -> dict:
                     }
                 })
         except Exception as exc:
-            logger.warning("Failed to list GCP buckets: %s", exc)
+            discovery_failures += 1
+            warnings.append("Cloud Storage discovery unavailable.")
+            logger.warning(
+                "Failed to list GCP buckets; exception_type=%s",
+                type(exc).__name__,
+            )
 
-        return {"success": True, "data": resources}
+        if discovery_failures == 2:
+            return {"success": False, "error": "GCP resource discovery failed."}
+        result = {"success": True, "data": resources}
+        if warnings:
+            result["warnings"] = warnings
+        return result
     except Exception as exc:
-        logger.exception("Unexpected error fetching GCP resource metadata")
-        return {"success": False, "error": f"Unexpected error: {str(exc)}"}
+        logger.error(
+            "Unexpected GCP resource metadata error; exception_type=%s",
+            type(exc).__name__,
+        )
+        return {"success": False, "error": "Unexpected GCP resource metadata error."}

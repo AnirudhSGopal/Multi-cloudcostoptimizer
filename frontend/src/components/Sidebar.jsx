@@ -76,9 +76,9 @@ export default function Sidebar() {
       </div>
 
       <nav className="sidebar-nav">
-        {navItems.map(({ to, icon: Icon, label, badge, badgeColor }) => (
+        {navItems.map(({ to, icon, label, badge, badgeColor }) => (
           <NavLink key={to} to={to} className={({ isActive }) => isActive ? 'active' : ''}>
-            <Icon size={14} />
+            {createElement(icon, { size: 14 })}
             <span style={{ flex: 1 }}>{label}</span>
             {badge > 0 && (
               <span style={{
@@ -121,3 +121,4 @@ export default function Sidebar() {
     </aside>
   )
 }
+import { createElement } from 'react'

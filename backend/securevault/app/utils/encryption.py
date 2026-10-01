@@ -19,11 +19,11 @@ logger = logging.getLogger(__name__)
 
 # ── Load key at module level — fail loud if missing ──────────────────────────
 
-_raw_key = os.getenv("CLOUD_ENCRYPTION_KEY")
+_raw_key = os.getenv("ENCRYPTION_KEY") or os.getenv("CLOUD_ENCRYPTION_KEY")
 
 if not _raw_key:
     raise RuntimeError(
-        "CLOUD_ENCRYPTION_KEY environment variable is not set. "
+        "ENCRYPTION_KEY environment variable is not set. "
         "Generate one with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\" "
         "and add it to your .env file."
     )
@@ -32,7 +32,7 @@ try:
     _fernet = Fernet(_raw_key.encode())
 except Exception as exc:
     raise RuntimeError(
-        f"CLOUD_ENCRYPTION_KEY is not a valid Fernet key: {exc}"
+        "ENCRYPTION_KEY is not a valid Fernet key"
     ) from exc
 
 

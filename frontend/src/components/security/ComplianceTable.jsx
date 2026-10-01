@@ -1,12 +1,13 @@
-const rows = [
-  { framework: 'CIS Benchmark', status: 'Fail', score: '71%', findings: '12 high, 4 medium' },
-  { framework: 'SOC 2 Controls', status: 'Pass', score: '92%', findings: '1 medium' },
-  { framework: 'ISO 27001',      status: 'Pass', score: '88%', findings: '3 low' },
-  { framework: 'PCI DSS',        status: 'Fail', score: '76%', findings: '2 high, 5 medium' },
-]
-
 export default function ComplianceTable({ scanData }) {
-  const dataToRender = scanData && scanData.length > 0 ? scanData : rows;
+  const dataToRender = scanData || []
+
+  if (dataToRender.length === 0) {
+    return (
+      <p role="status" style={{ color: 'var(--text-muted)', padding: '16px 0' }}>
+        Compliance results will appear after a security scan.
+      </p>
+    )
+  }
 
   return (
     <div style={{ overflowX: 'auto' }}>

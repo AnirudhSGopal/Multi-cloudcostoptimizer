@@ -22,10 +22,12 @@ def validate_credentials(subscription_id: str, tenant_id: str, client_id: str, c
         credential = ClientSecretCredential(
             tenant_id=tenant_id,
             client_id=client_id,
-            client_secret=client_secret
+            client_secret=client_secret,
+            connection_timeout=5,
+            read_timeout=20,
         )
         sub_client = SubscriptionClient(credential)
-        sub = sub_client.subscriptions.get(subscription_id)
+        sub = sub_client.subscriptions.get(subscription_id, timeout=20)
 
         return {
             "success": True,
@@ -36,9 +38,11 @@ def validate_credentials(subscription_id: str, tenant_id: str, client_id: str, c
             }
         }
     except Exception as exc:
-        err_msg = str(exc)
-        logger.warning("Azure credential validation failed: %s", err_msg)
-        return {"success": False, "error": f"Azure validation failed: {err_msg}"}
+        logger.warning(
+            "Azure credential validation failed; exception_type=%s",
+            type(exc).__name__,
+        )
+        return {"success": False, "error": "Azure credential validation failed."}
 
 
 def get_cost_data(subscription_id: str, tenant_id: str, client_id: str, client_secret: str, months: int = 3) -> dict:
@@ -55,7 +59,9 @@ def get_cost_data(subscription_id: str, tenant_id: str, client_id: str, client_s
         credential = ClientSecretCredential(
             tenant_id=tenant_id,
             client_id=client_id,
-            client_secret=client_secret
+            client_secret=client_secret,
+            connection_timeout=5,
+            read_timeout=20,
         )
         client = CostManagementClient(credential)
 
@@ -82,7 +88,7 @@ def get_cost_data(subscription_id: str, tenant_id: str, client_id: str, client_s
             )
         )
 
-        result = client.query.usage(scope=scope, parameters=query_def)
+        result = client.query.usage(scope=scope, parameters=query_def, timeout=30)
 
         normalized_costs = []
         if result and result.rows:
@@ -104,9 +110,11 @@ def get_cost_data(subscription_id: str, tenant_id: str, client_id: str, client_s
 
         return {"success": True, "data": normalized_costs}
     except Exception as exc:
-        err_msg = str(exc)
-        logger.warning("Azure Cost Management query failed: %s", err_msg)
-        return {"success": False, "error": f"Azure Cost Management error: {err_msg}"}
+        logger.warning(
+            "Azure Cost Management query failed; exception_type=%s",
+            type(exc).__name__,
+        )
+        return {"success": False, "error": "Azure Cost Management request failed."}
 
 
 def get_resource_metadata(subscription_id: str, tenant_id: str, client_id: str, client_secret: str) -> dict:
@@ -121,27 +129,37 @@ def get_resource_metadata(subscription_id: str, tenant_id: str, client_id: str, 
         credential = ClientSecretCredential(
             tenant_id=tenant_id,
             client_id=client_id,
-            client_secret=client_secret
+            client_secret=client_secret,
+            connection_timeout=5,
+            read_timeout=20,
         )
 
         resources = []
+        warnings = []
+        discovery_failures = 0
 
         # 1. Virtual Machines
         try:
             compute_client = ComputeManagementClient(credential, subscription_id)
-            vms = list(compute_client.virtual_machines.list_all())
+            vms = list(compute_client.virtual_machines.list_all(timeout=20))
             for vm in vms:
                 # Determine state
                 instance_view = None
                 status = "unknown"
                 try:
                     rg = vm.id.split("/")[4] if "/" in vm.id else ""
-                    instance_view = compute_client.virtual_machines.instance_view(rg, vm.name)
+                    instance_view = compute_client.virtual_machines.instance_view(
+                        rg, vm.name, timeout=20
+                    )
                     for st in instance_view.statuses:
                         if st.code.startswith("PowerState/"):
                             status = st.code.split("/")[-1].lower()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    warnings.append("Some Azure VM statuses are unavailable.")
+                    logger.warning(
+                        "Azure VM instance status unavailable; exception_type=%s",
+                        type(exc).__name__,
+                    )
 
                 resources.append({
                     "resource_id": vm.name,
@@ -155,12 +173,17 @@ def get_resource_metadata(subscription_id: str, tenant_id: str, client_id: str, 
                     }
                 })
         except Exception as exc:
-            logger.warning("Failed to list Azure VMs: %s", exc)
+            discovery_failures += 1
+            warnings.append("Azure VM discovery unavailable.")
+            logger.warning(
+                "Failed to list Azure VMs; exception_type=%s",
+                type(exc).__name__,
+            )
 
         # 2. Storage Accounts
         try:
             storage_client = StorageManagementClient(credential, subscription_id)
-            accounts = list(storage_client.storage_accounts.list())
+            accounts = list(storage_client.storage_accounts.list(timeout=20))
             for sa in accounts:
                 resources.append({
                     "resource_id": sa.name,
@@ -175,9 +198,22 @@ def get_resource_metadata(subscription_id: str, tenant_id: str, client_id: str, 
                     }
                 })
         except Exception as exc:
-            logger.warning("Failed to list Azure storage accounts: %s", exc)
+            discovery_failures += 1
+            warnings.append("Azure storage account discovery unavailable.")
+            logger.warning(
+                "Failed to list Azure storage accounts; exception_type=%s",
+                type(exc).__name__,
+            )
 
-        return {"success": True, "data": resources}
+        if discovery_failures == 2:
+            return {"success": False, "error": "Azure resource discovery failed."}
+        result = {"success": True, "data": resources}
+        if warnings:
+            result["warnings"] = warnings
+        return result
     except Exception as exc:
-        logger.exception("Unexpected error fetching Azure resource metadata")
-        return {"success": False, "error": f"Unexpected error: {str(exc)}"}
+        logger.error(
+            "Unexpected Azure resource metadata error; exception_type=%s",
+            type(exc).__name__,
+        )
+        return {"success": False, "error": "Unexpected Azure resource metadata error."}

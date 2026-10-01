@@ -1,0 +1,16 @@
+# Environments and credentials
+.env
+.env.*
+!.env.example
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local data and logs
+instance/
+*.db
+*.log

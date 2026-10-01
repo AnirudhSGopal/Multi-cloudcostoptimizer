@@ -1,8 +1,6 @@
 import { TrendingDown, TrendingUp, ArrowRight, Plug } from 'lucide-react'
 
 export default function AWSCard({ cost = 0, storage = '0.0 GB', connected = false, onClick }) {
-  const isUp = true
-
   return (
     <div className="provider-card" style={{ cursor: 'pointer', opacity: connected ? 1 : 0.75 }} onClick={onClick}>
       <div className="provider-card__header">

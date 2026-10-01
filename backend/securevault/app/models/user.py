@@ -62,12 +62,14 @@ class User(db.Model):
     # ── Serialisation ─────────────────────────────────────────────────────
     def to_dict(self) -> dict:
         r_val = self.role.value if isinstance(self.role, RoleEnum) else str(self.role)
+        from app.services.cloud.demo_dataset import is_demo_user
         return {
             "id":         self.id,
             "username":   self.username,
             "email":      self.email,
             "role":       r_val.lower(),
             "is_active":  self.is_active,
+            "is_demo":    is_demo_user(self.email),
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

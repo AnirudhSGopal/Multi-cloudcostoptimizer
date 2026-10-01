@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
-from app.core.extensions import db
+from app.core.extensions import db, limiter
 from app.utils.decorators import active_user_required
 from app.models.user import User
 from app.models.cloud import CloudMetric, CloudProviderEnum
@@ -30,6 +30,7 @@ cloud_bp = Blueprint("cloud", __name__)
 @cloud_bp.post("/accounts/test")
 @cloud_bp.post("/test")
 @jwt_required()
+@limiter.limit("10 per minute")
 @active_user_required
 def test_cloud_credentials():
     """
@@ -46,6 +47,16 @@ def test_cloud_credentials():
 
     if not credentials or not isinstance(credentials, dict):
         return jsonify({"success": False, "error": "Credentials object is required"}), 400
+
+    user_id = int(get_jwt_identity())
+    user = db.session.get(User, user_id)
+    from app.services.cloud.demo_dataset import is_demo_user
+    if user and is_demo_user(user.email):
+        return jsonify({
+            "success": True,
+            "message": f"{provider_str.upper()} credentials verified successfully.",
+            "data": {"account_id": f"demo-{provider_str}-enterprise-01", "status": "active"}
+        }), 200
 
     try:
         service = get_provider_service(provider_str)
@@ -64,22 +75,47 @@ def test_cloud_credentials():
         }), 200
 
     except Exception as exc:
-        logger.exception("Error testing cloud credentials")
-        return jsonify({"success": False, "error": str(exc)}), 500
+        logger.error(
+            "Cloud credential test failed; exception_type=%s",
+            type(exc).__name__,
+        )
+        return jsonify({"success": False, "error": "Cloud credential test failed."}), 500
 
+
+from app.services.cloud.demo_dataset import (
+    is_demo_user,
+    get_demo_service_costs,
+    get_demo_resources,
+    get_demo_recommendations,
+    get_30_day_chart_cycle,
+)
 
 # ── 2. List Connected Accounts ────────────────────────────────────────────────
 
 @cloud_bp.get("/accounts")
 @cloud_bp.get("/")
 @jwt_required()
+@limiter.limit("60 per minute")
 @active_user_required
 def list_cloud_accounts():
     """
     List all connected cloud accounts for the authenticated user.
     Credentials are NEVER returned in this response.
     """
-    user_id = get_jwt_identity()
+    user_id = int(get_jwt_identity())
+    user = db.session.get(User, user_id)
+
+    # Auto-seed demo accounts if demo user
+    if user and is_demo_user(user.email):
+        accounts = CloudAccount.query.filter_by(user_id=user_id).all()
+        if len(accounts) < 3:
+            from scripts.seed_demo_user import seed_demo_accounts_for_user
+            seed_demo_accounts_for_user(user)
+            accounts = CloudAccount.query.filter_by(user_id=user_id).all()
+        return jsonify({
+            "accounts": [acc.to_dict() for acc in accounts]
+        }), 200
+
     accounts = CloudAccount.query.filter_by(user_id=user_id).all()
     return jsonify({
         "accounts": [acc.to_dict() for acc in accounts]
@@ -91,6 +127,7 @@ def list_cloud_accounts():
 @cloud_bp.post("/accounts")
 @cloud_bp.post("/")
 @jwt_required()
+@limiter.limit("10 per hour")
 @active_user_required
 def add_cloud_account():
     """
@@ -98,7 +135,7 @@ def add_cloud_account():
     Expects body:
       { "provider": "aws"|"gcp"|"azure", "account_label": str, "credentials": { ... } }
     """
-    user_id = get_jwt_identity()
+    user_id = int(get_jwt_identity())
     data = request.get_json(silent=True) or {}
     provider_str = (data.get("provider") or "").strip().lower()
     account_label = (data.get("account_label") or f"{provider_str.upper()} Account").strip()
@@ -124,20 +161,31 @@ def add_cloud_account():
                     if v is not None and str(v).strip() != "":
                         merged[k] = v
                 final_creds = merged
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.error(
+                "Stored cloud credentials could not be decrypted; account_id=%s exception_type=%s",
+                account.id,
+                type(exc).__name__,
+            )
+            return jsonify({"error": "Stored cloud credentials could not be loaded."}), 500
 
-    # 1. Validate merged credentials with live call
-    try:
-        service = get_provider_service(provider_str)
-        validation_res = _call_provider_validate(service, provider_str, final_creds)
+    # 1. Validate merged credentials with live call (bypass for demo user)
+    user = db.session.get(User, user_id)
+    if not (user and is_demo_user(user.email)):
+        try:
+            service = get_provider_service(provider_str)
+            validation_res = _call_provider_validate(service, provider_str, final_creds)
 
-        if not validation_res.get("success"):
-            return jsonify({
-                "error": validation_res.get("error", f"{provider_str.upper()} credential validation failed")
-            }), 400
-    except Exception as exc:
-        return jsonify({"error": f"Validation failed: {str(exc)}"}), 400
+            if not validation_res.get("success"):
+                return jsonify({
+                    "error": validation_res.get("error", f"{provider_str.upper()} credential validation failed")
+                }), 400
+        except Exception as exc:
+            logger.warning(
+                "Cloud credential validation raised an error; exception_type=%s",
+                type(exc).__name__,
+            )
+            return jsonify({"error": "Cloud credential validation failed."}), 400
 
     # 2. Store or update account record
     if account is None:
@@ -168,6 +216,7 @@ def add_cloud_account():
 @cloud_bp.get("/accounts/<int:account_id>")
 @cloud_bp.get("/<int:account_id>")
 @jwt_required()
+@limiter.limit("10 per hour")
 @active_user_required
 def get_cloud_account(account_id: int):
     """
@@ -176,6 +225,34 @@ def get_cloud_account(account_id: int):
     """
     account = _get_account_or_404(account_id)
     provider_str = account.provider.value
+    user_id = int(get_jwt_identity())
+    user = db.session.get(User, user_id)
+
+    from config.settings import get_provider_storage_capacity
+    storage_size_gb = get_provider_storage_capacity(provider_str)
+
+    # If demo user: serve curated mock data with 30-day reduction cycle
+    if user and is_demo_user(user.email):
+        cost_data = get_demo_service_costs(provider_str)
+        resources = get_demo_resources(provider_str)
+        recommendations = get_demo_recommendations()
+        daily_trend = get_30_day_chart_cycle()
+
+        account.last_synced_at = datetime.now(timezone.utc)
+        account.status = AccountStatusEnum.CONNECTED
+        _persist_metrics(account, cost_data, resources)
+        db.session.commit()
+
+        return jsonify({
+            "account": account.to_dict(),
+            "storage_size": storage_size_gb,
+            "storage_size_gb": storage_size_gb,
+            "cost_data": cost_data,
+            "resources": resources,
+            "recommendations": recommendations,
+            "daily_trend": daily_trend,
+            "cost_error": None,
+        }), 200
 
     try:
         creds = account.get_credentials()
@@ -190,8 +267,14 @@ def get_cloud_account(account_id: int):
         resource_res = _call_provider_resources(service, provider_str, creds)
         resources = resource_res.get("data", []) if resource_res.get("success") else []
 
-        # Run AI-based cost optimizer
-        recommendations = optimizer.analyze(resources, cost_data)
+        # Run AI-based cost optimizer with invariant storage capacity check
+        provider_storage = {provider_str: storage_size_gb}
+        recommendations = optimizer.analyze(
+            resources,
+            cost_data,
+            provider_storage=provider_storage,
+            user_id=user_id,
+        )
 
         # Update account status and last_synced_at
         account.last_synced_at = datetime.now(timezone.utc)
@@ -206,17 +289,50 @@ def get_cloud_account(account_id: int):
 
         return jsonify({
             "account": account.to_dict(),
+            "storage_size": storage_size_gb,
+            "storage_size_gb": storage_size_gb,
             "cost_data": cost_data,
             "resources": resources,
             "recommendations": recommendations,
             "cost_error": cost_error,
+            "resource_error": (
+                resource_res.get("error") if not resource_res.get("success") else None
+            ),
+            "warnings": cost_res.get("warnings", []) + resource_res.get("warnings", []),
         }), 200
 
     except Exception as exc:
-        logger.exception("Error syncing cloud account %d", account_id)
+        db.session.rollback()
+        logger.error(
+            "Cloud account sync failed; account_id=%d exception_type=%s",
+            account_id,
+            type(exc).__name__,
+        )
         account.status = AccountStatusEnum.ERROR
-        db.session.commit()
-        return jsonify({"error": f"Failed to sync account: {str(exc)}"}), 500
+        try:
+            db.session.commit()
+        except Exception as persist_exc:
+            db.session.rollback()
+            logger.error(
+                "Failed to persist cloud account error status; account_id=%d exception_type=%s",
+                account_id,
+                type(persist_exc).__name__,
+            )
+        return jsonify({"error": "Failed to sync cloud account."}), 500
+
+
+# ── 4b. Multi-Cloud 30-Day Cost Trend Endpoint ───────────────────────────────
+
+@cloud_bp.get("/chart-data")
+@cloud_bp.get("/trend")
+@jwt_required()
+@limiter.limit("60 per minute")
+@active_user_required
+def get_chart_trend():
+    """Return 30-day cost reduction trend cycle."""
+    return jsonify({
+        "trend": get_30_day_chart_cycle()
+    }), 200
 
 
 # ── 5. Delete Cloud Account ───────────────────────────────────────────────────
@@ -224,6 +340,7 @@ def get_cloud_account(account_id: int):
 @cloud_bp.delete("/accounts/<int:account_id>")
 @cloud_bp.delete("/<int:account_id>")
 @jwt_required()
+@limiter.limit("10 per hour")
 @active_user_required
 def delete_cloud_account(account_id: int):
     """
@@ -243,10 +360,12 @@ def delete_cloud_account(account_id: int):
 
 def _get_account_or_404(account_id: int) -> CloudAccount:
     from flask import abort
-    user_id = get_jwt_identity()
-    user = User.query.get(user_id)
+    user_id = int(get_jwt_identity())
+    user = db.session.get(User, user_id)
 
-    account = CloudAccount.query.get_or_404(account_id)
+    account = db.session.get(CloudAccount, account_id)
+    if account is None:
+        abort(404)
     if not user.is_admin() and account.user_id != user_id:
         abort(403)
     return account
@@ -322,8 +441,9 @@ def _call_provider_resources(service, provider_str: str, creds: dict) -> dict:
 def _persist_metrics(account: CloudAccount, cost_data: list, resources: list) -> None:
     """Save cost summary metrics into CloudMetric table."""
     try:
-        # Clear existing metrics for this account
-        CloudMetric.query.filter_by(cloud_account_id=account.id).delete()
+        db.session.query(CloudMetric).filter_by(
+            cloud_account_id=account.id
+        ).delete(synchronize_session=False)
 
         for item in cost_data:
             metric = CloudMetric(
@@ -337,5 +457,12 @@ def _persist_metrics(account: CloudAccount, cost_data: list, resources: list) ->
                 cost_usd=item.get("monthly_cost", 0.0),
             )
             db.session.add(metric)
+        db.session.commit()
     except Exception as exc:
-        logger.warning("Failed to persist CloudMetrics: %s", exc)
+        db.session.rollback()
+        logger.error(
+            "Failed to persist CloudMetrics for account %s (%s)",
+            account.id,
+            type(exc).__name__,
+        )
+        raise

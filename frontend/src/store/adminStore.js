@@ -11,10 +11,11 @@ const useAdminStore = create((set, get) => ({
   usersPage: 1,
   usersPages: 1,
   usersLoading: false,
+  usersError: '',
   usersSearch: '',
 
   fetchUsers: async (params = {}) => {
-    set({ usersLoading: true })
+    set({ usersLoading: true, usersError: '' })
     try {
       const { search, page } = { search: get().usersSearch, page: get().usersPage, ...params }
       const { data } = await adminService.getUsers({ search, page, per_page: 20 })
@@ -24,10 +25,11 @@ const useAdminStore = create((set, get) => ({
         usersPage: data.page,
         usersPages: data.pages,
         usersLoading: false,
+        usersError: '',
       })
     } catch (e) {
-      console.error('Failed to fetch users:', e)
-      set({ usersLoading: false })
+      console.warn('Failed to fetch users')
+      set({ usersLoading: false, usersError: e.response?.data?.error || 'Unable to load users.' })
     }
   },
 
@@ -60,11 +62,12 @@ const useAdminStore = create((set, get) => ({
   cloudAccountsPage: 1,
   cloudAccountsPages: 1,
   cloudAccountsLoading: false,
+  cloudAccountsError: '',
   cloudAccountsProvider: '',
   cloudAccountsStatus: '',
 
   fetchCloudAccounts: async (params = {}) => {
-    set({ cloudAccountsLoading: true })
+    set({ cloudAccountsLoading: true, cloudAccountsError: '' })
     try {
       const { provider, status, page } = {
         provider: get().cloudAccountsProvider,
@@ -82,10 +85,14 @@ const useAdminStore = create((set, get) => ({
         cloudAccountsPage: data.page,
         cloudAccountsPages: data.pages,
         cloudAccountsLoading: false,
+        cloudAccountsError: '',
       })
     } catch (e) {
-      console.error('Failed to fetch cloud accounts:', e)
-      set({ cloudAccountsLoading: false })
+      console.warn('Failed to fetch cloud accounts')
+      set({
+        cloudAccountsLoading: false,
+        cloudAccountsError: e.response?.data?.error || 'Unable to load cloud accounts.',
+      })
     }
   },
 
@@ -98,10 +105,11 @@ const useAdminStore = create((set, get) => ({
   scansPage: 1,
   scansPages: 1,
   scansLoading: false,
+  scansError: '',
   scansStatus: '',
 
   fetchScans: async (params = {}) => {
-    set({ scansLoading: true })
+    set({ scansLoading: true, scansError: '' })
     try {
       const { status, page } = {
         status: get().scansStatus,
@@ -117,10 +125,11 @@ const useAdminStore = create((set, get) => ({
         scansPage: data.page,
         scansPages: data.pages,
         scansLoading: false,
+        scansError: '',
       })
     } catch (e) {
-      console.error('Failed to fetch scans:', e)
-      set({ scansLoading: false })
+      console.warn('Failed to fetch scans')
+      set({ scansLoading: false, scansError: e.response?.data?.error || 'Unable to load scans.' })
     }
   },
 
@@ -129,30 +138,32 @@ const useAdminStore = create((set, get) => ({
   // ── Stats ────────────────────────────────────────────────
   stats: null,
   statsLoading: false,
+  statsError: '',
 
   fetchStats: async () => {
-    set({ statsLoading: true })
+    set({ statsLoading: true, statsError: '' })
     try {
       const { data } = await adminService.getStats()
-      set({ stats: data, statsLoading: false })
+      set({ stats: data, statsLoading: false, statsError: '' })
     } catch (e) {
-      console.error('Failed to fetch stats:', e)
-      set({ statsLoading: false })
+      console.warn('Failed to fetch platform statistics')
+      set({ statsLoading: false, statsError: e.response?.data?.error || 'Unable to load platform statistics.' })
     }
   },
 
   // ── System Health ────────────────────────────────────────
   health: null,
   healthLoading: false,
+  healthError: '',
 
   fetchHealth: async () => {
-    set({ healthLoading: true })
+    set({ healthLoading: true, healthError: '' })
     try {
       const { data } = await adminService.getSystemHealth()
-      set({ health: data, healthLoading: false })
+      set({ health: data, healthLoading: false, healthError: '' })
     } catch (e) {
-      console.error('Failed to fetch health:', e)
-      set({ healthLoading: false })
+      console.warn('Failed to fetch system health')
+      set({ healthLoading: false, healthError: e.response?.data?.error || 'Unable to load system health.' })
     }
   },
 }))

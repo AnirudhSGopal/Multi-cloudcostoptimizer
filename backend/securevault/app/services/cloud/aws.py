@@ -10,9 +10,16 @@ Required IAM permissions:
 import logging
 from datetime import datetime, timedelta, timezone
 import boto3
+from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 logger = logging.getLogger(__name__)
+
+_CLIENT_CONFIG = Config(
+    connect_timeout=5,
+    read_timeout=20,
+    retries={"max_attempts": 3, "mode": "standard"},
+)
 
 
 def validate_credentials(access_key_id: str, secret_access_key: str, region: str = "us-east-1") -> dict:
@@ -29,7 +36,7 @@ def validate_credentials(access_key_id: str, secret_access_key: str, region: str
             aws_secret_access_key=secret_access_key,
             region_name=region or "us-east-1"
         )
-        sts = session.client("sts")
+        sts = session.client("sts", config=_CLIENT_CONFIG)
         identity = sts.get_caller_identity()
         return {
             "success": True,
@@ -40,12 +47,17 @@ def validate_credentials(access_key_id: str, secret_access_key: str, region: str
             }
         }
     except (BotoCoreError, ClientError) as exc:
-        err_msg = exc.response.get("Error", {}).get("Message") if hasattr(exc, "response") else str(exc)
-        logger.warning("AWS credential validation failed: %s", err_msg)
-        return {"success": False, "error": f"AWS validation failed: {err_msg}"}
+        logger.warning(
+            "AWS credential validation failed; exception_type=%s",
+            type(exc).__name__,
+        )
+        return {"success": False, "error": "AWS credential validation failed."}
     except Exception as exc:
-        logger.exception("Unexpected error validating AWS credentials")
-        return {"success": False, "error": f"Unexpected error: {str(exc)}"}
+        logger.error(
+            "Unexpected AWS credential validation error; exception_type=%s",
+            type(exc).__name__,
+        )
+        return {"success": False, "error": "Unexpected AWS credential validation error."}
 
 
 def get_cost_data(access_key_id: str, secret_access_key: str, region: str = "us-east-1", months: int = 3) -> dict:
@@ -60,7 +72,7 @@ def get_cost_data(access_key_id: str, secret_access_key: str, region: str = "us-
             aws_secret_access_key=secret_access_key,
             region_name=region or "us-east-1"
         )
-        ce = session.client("ce")
+        ce = session.client("ce", config=_CLIENT_CONFIG)
 
         end_date = datetime.now(timezone.utc).replace(day=1)
         start_date = end_date
@@ -101,12 +113,14 @@ def get_cost_data(access_key_id: str, secret_access_key: str, region: str = "us-
 
         return {"success": True, "data": normalized_costs}
     except (BotoCoreError, ClientError) as exc:
-        err_msg = exc.response.get("Error", {}).get("Message") if hasattr(exc, "response") else str(exc)
-        logger.warning("AWS Cost Explorer error: %s", err_msg)
-        return {"success": False, "error": f"AWS Cost Explorer error: {err_msg}"}
+        logger.warning("AWS Cost Explorer failed; exception_type=%s", type(exc).__name__)
+        return {"success": False, "error": "AWS Cost Explorer request failed."}
     except Exception as exc:
-        logger.exception("Unexpected error fetching AWS cost data")
-        return {"success": False, "error": f"Unexpected error: {str(exc)}"}
+        logger.error(
+            "Unexpected AWS cost retrieval error; exception_type=%s",
+            type(exc).__name__,
+        )
+        return {"success": False, "error": "Unexpected AWS cost retrieval error."}
 
 
 def get_resource_metadata(access_key_id: str, secret_access_key: str, region: str = "us-east-1") -> dict:
@@ -122,10 +136,13 @@ def get_resource_metadata(access_key_id: str, secret_access_key: str, region: st
             region_name=region or "us-east-1"
         )
         resources = []
+        warnings = []
+        discovery_failures = 0
+        ec2 = None
 
         # 1. EC2 Instances
         try:
-            ec2 = session.client("ec2")
+            ec2 = session.client("ec2", config=_CLIENT_CONFIG)
             paginator = ec2.get_paginator("describe_instances")
             for page in paginator.paginate():
                 for reservation in page.get("Reservations", []):
@@ -152,7 +169,12 @@ def get_resource_metadata(access_key_id: str, secret_access_key: str, region: st
                             }
                         })
         except Exception as exc:
-            logger.warning("Failed to describe EC2 instances: %s", exc)
+            discovery_failures += 1
+            warnings.append("EC2 instance discovery unavailable.")
+            logger.warning(
+                "Failed to describe EC2 instances; exception_type=%s",
+                type(exc).__name__,
+            )
 
         # 2. EBS Volumes (check for unattached)
         try:
@@ -176,11 +198,16 @@ def get_resource_metadata(access_key_id: str, secret_access_key: str, region: st
                     }
                 })
         except Exception as exc:
-            logger.warning("Failed to describe EBS volumes: %s", exc)
+            discovery_failures += 1
+            warnings.append("EBS volume discovery unavailable.")
+            logger.warning(
+                "Failed to describe EBS volumes; exception_type=%s",
+                type(exc).__name__,
+            )
 
         # 3. S3 Buckets
         try:
-            s3 = session.client("s3")
+            s3 = session.client("s3", config=_CLIENT_CONFIG)
             buckets = s3.list_buckets().get("Buckets", [])
             for b in buckets:
                 bucket_name = b.get("Name")
@@ -191,8 +218,14 @@ def get_resource_metadata(access_key_id: str, secret_access_key: str, region: st
                 try:
                     s3.get_bucket_lifecycle_configuration(Bucket=bucket_name)
                     has_lifecycle = True
-                except ClientError:
-                    has_lifecycle = False
+                except ClientError as exc:
+                    error_code = exc.response.get("Error", {}).get("Code")
+                    if error_code != "NoSuchLifecycleConfiguration":
+                        warnings.append("Some S3 lifecycle policies could not be checked.")
+                        logger.warning(
+                            "S3 lifecycle policy check failed; exception_type=%s",
+                            type(exc).__name__,
+                        )
 
                 resources.append({
                     "resource_id": bucket_name,
@@ -206,9 +239,22 @@ def get_resource_metadata(access_key_id: str, secret_access_key: str, region: st
                     }
                 })
         except Exception as exc:
-            logger.warning("Failed to list S3 buckets: %s", exc)
+            discovery_failures += 1
+            warnings.append("S3 bucket discovery unavailable.")
+            logger.warning(
+                "Failed to list S3 buckets; exception_type=%s",
+                type(exc).__name__,
+            )
 
-        return {"success": True, "data": resources}
+        if discovery_failures == 3:
+            return {"success": False, "error": "AWS resource discovery failed."}
+        result = {"success": True, "data": resources}
+        if warnings:
+            result["warnings"] = warnings
+        return result
     except Exception as exc:
-        logger.exception("Unexpected error fetching AWS resource metadata")
-        return {"success": False, "error": f"Unexpected error: {str(exc)}"}
+        logger.error(
+            "Unexpected AWS resource metadata error; exception_type=%s",
+            type(exc).__name__,
+        )
+        return {"success": False, "error": "Unexpected AWS resource metadata error."}

@@ -1,17 +1,21 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowRight, Plug } from 'lucide-react'
 import CostChart from '../components/charts/CostChart'
 import useCloudStore from '../store/cloudStore'
+import useAuthStore from '../store/authStore'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell, ResponsiveContainer } from 'recharts'
 import Button from '../components/common/Button'
+import { STORAGE_CONFIG, TOTAL_STORAGE_GB } from '../config/storageConfig'
 
 const PROVIDER_HEX = { aws: '#ff8c38', gcp: '#34aaff', azure: '#9d72ff', AWS: '#ff8c38', GCP: '#34aaff', Azure: '#9d72ff' }
 const RANGES    = ['7d', '30d', '90d', '1y']
 const PROVIDERS = ['all', 'AWS', 'GCP', 'Azure']
 
 export default function CostAnalysis() {
-  const { dateRange, setDateRange, costData, accounts, fetchAccounts, syncAllAccounts, costLoading, costError } = useCloudStore()
+  const { setDateRange, costData, dailyTrend, accounts, accountsLoading, fetchAccounts, syncAllAccounts, costLoading, costError, accountsError } = useCloudStore()
+  const user = useAuthStore(s => s.user)
+  const isDemo = user?.is_demo || user?.email === 'anirudhsgopal18@gmai.com' || user?.email === 'anirudhsgopal18@gmail.com'
   const [activeProvider, setActiveProvider] = useState('all')
   const [activeRange, setActiveRange]       = useState('30d')
   const navigate = useNavigate()
@@ -35,11 +39,40 @@ export default function CostAnalysis() {
   const totalCost = filtered.reduce((a, b) => a + b.cost, 0)
   const grandTotal = normalizedData.reduce((a, b) => a + b.cost, 0)
 
+  const chartDataForRange = useMemo(() => {
+    if (!dailyTrend || dailyTrend.length === 0) return null
+    const source = activeRange === '7d' ? dailyTrend.slice(-7) : dailyTrend
+    return source.map(d => {
+      const aws = Number(d.AWS) || 0
+      const gcp = Number(d.GCP) || 0
+      const azure = Number(d.Azure) || 0
+      const total = typeof d.Total === 'number' && d.Total > 0 ? d.Total : Number((aws + gcp + azure).toFixed(2))
+      return {
+        ...d,
+        label: d.formatted_date || d.date || d.day,
+        day: d.day,
+        day_num: d.day_num,
+        formatted_date: d.formatted_date || d.date || d.day,
+        AWS: aws,
+        GCP: gcp,
+        Azure: azure,
+        Total: total,
+        monthly_runrate: d.monthly_runrate || Math.round(total * 30),
+        phase: d.phase,
+        milestone: d.milestone,
+        storage_aws: d.storage_aws || STORAGE_CONFIG.AWS.sizeGb,
+        storage_gcp: d.storage_gcp || STORAGE_CONFIG.GCP.sizeGb,
+        storage_azure: d.storage_azure || STORAGE_CONFIG.Azure.sizeGb,
+        storage_total: d.storage_total || TOTAL_STORAGE_GB,
+      }
+    })
+  }, [dailyTrend, activeRange])
+
   return (
     <div className="page-content">
 
       {/* Empty State Banner if no accounts connected */}
-      {accounts.length === 0 && (
+      {!accountsLoading && !accountsError && accounts.length === 0 && (
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16,
           padding: '16px 20px',
@@ -64,14 +97,23 @@ export default function CostAnalysis() {
         </div>
       )}
 
-      {/* Error notification if billing export or API query fails */}
-      {costError && (
+      {/* Error notification if billing export or API query fails (never shown for demo users) */}
+      {!isDemo && costError && (
         <div style={{
           padding: '10px 14px', borderRadius: 8,
           background: 'var(--red-dim)', border: '1px solid rgba(239,68,68,0.3)',
           color: 'var(--red)', fontSize: 12, marginBottom: 16,
         }}>
           ⚠️ {costError}
+        </div>
+      )}
+      {accountsError && (
+        <div role="alert" style={{
+          padding: '10px 14px', borderRadius: 8,
+          background: 'var(--red-dim)', border: '1px solid rgba(239,68,68,0.3)',
+          color: 'var(--red)', fontSize: 12, marginBottom: 16,
+        }}>
+          {accountsError}
         </div>
       )}
 
@@ -98,7 +140,7 @@ export default function CostAnalysis() {
       {/* Cost trend */}
       <div className="card">
         <div className="card__title">Cost trend over time</div>
-        <CostChart />
+        <CostChart data={chartDataForRange} />
       </div>
 
       {/* Charts + table */}
@@ -131,7 +173,7 @@ export default function CostAnalysis() {
             </ResponsiveContainer>
           ) : (
             <div style={{ height: 220, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
-              {costLoading ? 'Loading cost data...' : 'No service cost metrics available.'}
+              {costLoading || accountsLoading ? 'Loading cost data...' : 'No service cost metrics available.'}
             </div>
           )}
         </div>
@@ -174,7 +216,7 @@ export default function CostAnalysis() {
             </table>
           ) : (
             <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: 12 }}>
-              {costLoading ? 'Syncing live cost data...' : 'Connect your cloud credentials to see service cost breakdowns.'}
+              {costLoading || accountsLoading ? 'Syncing live cost data...' : 'Connect your cloud credentials to see service cost breakdowns.'}
             </div>
           )}
 

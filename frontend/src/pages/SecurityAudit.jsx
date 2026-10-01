@@ -1,70 +1,7 @@
 import { useState, useRef } from 'react'
-import { ShieldCheck, ShieldAlert, ShieldX, Lock, Upload, GitBranch, X, Loader2 } from 'lucide-react'
+import { ShieldCheck, Lock, Upload, GitBranch, X, Loader2 } from 'lucide-react'
 import AlertBanner from '../components/security/AlertBanner'
-import ComplianceTable from '../components/security/ComplianceTable'
-import SecurityGauge from '../components/charts/SecurityGauge'
 import useCloudStore from '../store/cloudStore'
-import { apiClient } from '../services/api'
-
-// ─── default overall score (shown before any scan) ────────────────────────────
-
-const DEFAULT_OVERALL = { score: 74, icon: Lock, color: 'var(--blue)', status: 'Moderate' }
-
-// ─── map Claude overall score → icon + color ──────────────────────────────────
-
-function resolveOverallMeta(status) {
-  if (status === 'Good')     return { icon: ShieldCheck, color: 'var(--green)'  }
-  if (status === 'Critical') return { icon: ShieldX,     color: 'var(--red)'    }
-  return                            { icon: Lock,        color: 'var(--blue)'   }
-}
-
-// ─── map Claude alert shape → AlertBanner shape ───────────────────────────────
-
-function toAlertShape(a) {
-  const type = a.severity === 'critical' ? 'critical' : a.severity === 'warning' ? 'warning' : 'info'
-  
-  let fixSteps = []
-  if (type === 'critical') {
-    fixSteps = [
-      `Locate the affected resource or file: ${a.location ?? 'Unknown'}.`,
-      'Identify and extract any hardcoded credentials, API keys, or JWT secrets.',
-      'Configure the service to inject these values via environment variables.',
-      'Rotate any exposed credentials immediately on the provider control panel.'
-    ]
-  } else if (type === 'warning') {
-    fixSteps = [
-      `Review access rules and permissions for: ${a.location ?? 'Unknown'}.`,
-      'Enforce least-privilege configurations and restrict open access controls.',
-      'Enable server-side validation and secure configurations.',
-      'Run verification scripts to ensure that resources are not publicly queryable.'
-    ]
-  } else {
-    fixSteps = [
-      'Assess development guidelines and enforce secure header best practices.',
-      'Implement missing security libraries or middleware.',
-      'Set up continuous security testing in the CI/CD pipeline.'
-    ]
-  }
-
-  return {
-    id:       a.id,
-    type,
-    title:    a.message,
-    impact:   a.message,
-    resource: a.location ?? 'Unknown',
-    owner:    'Security Team',
-    time:     'just now',
-    fixSteps,
-  }
-}
-
-// ─── map Claude compliance rows → ComplianceTable shape ──────────────────────
-
-function toComplianceRow(r) {
-  const status = r.status === 'pass' ? 'Pass' : 'Fail'
-  const score  = r.status === 'pass' ? '>85%' : r.severity === 'high' ? '<70%' : '70–85%'
-  return { framework: r.check, status, score, findings: r.detail }
-}
 
 // ─── component ────────────────────────────────────────────────────────────────
 
@@ -74,7 +11,7 @@ export default function SecurityAudit() {
     dismissedAlerts, 
     dismissAlert,
     scanOverall,
-    scanCompliance,
+    scanCoverage,
     scanTime,
     repoUrl: storeRepoUrl,
     hasScanned,
@@ -93,9 +30,13 @@ export default function SecurityAudit() {
   const rawAlerts    = storeAlerts
   const activeAlerts = rawAlerts.filter(a => !dismissedAlerts.includes(a.id))
 
-  const activeOverall = scanOverall !== null
-    ? { ...scanOverall, ...resolveOverallMeta(scanOverall.status) }
-    : DEFAULT_OVERALL
+  const activeOverall = {
+    ...scanOverall,
+    score: null,
+    icon: Lock,
+    color: hasScanned ? 'var(--blue)' : 'var(--text-muted)',
+    status: hasScanned ? 'Partial assessment' : 'Not assessed',
+  }
 
   // ── file handling ──────────────────────────────────────────────────────────
 
@@ -123,7 +64,10 @@ export default function SecurityAudit() {
       try {
         const text = await f.text()
         filesWithContent.push({ name: f.name, content: text.slice(0, 3000) })
-      } catch (_) {}
+      } catch {
+        setError(`Unable to read "${f.name}". Choose a different file.`)
+        return
+      }
     }
 
     startBackgroundScan(url, filesWithContent)
@@ -203,6 +147,13 @@ export default function SecurityAudit() {
           </button>
         </div>
 
+        <p role="note" style={{ fontSize: 11, color: 'var(--text-muted)', margin: '8px 0' }}>
+          Repository scans automatically include an advisory Gemini review when
+          available. Up to 12 bounded source excerpts are sent to Google after
+          common secret-like values are redacted. No source is sent to OSV. AI
+          findings may be incomplete and should be verified.
+        </p>
+
         {/* file tags */}
         {files.length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
@@ -250,39 +201,58 @@ export default function SecurityAudit() {
           </div>
         </div>
       )}
+      {hasScanned && activeAlerts.length === 0 && (
+        <p role="status" style={{ color: 'var(--text-muted)' }}>
+          No findings were detected by the enabled checks. This partial result is not proof that the repository is secure.
+        </p>
+      )}
 
-      {/* ── Overall security score — single card ── */}
+      {/* ── Coverage and findings summary ── */}
       <div>
         <div className="section-header">
-          <span className="section-title">Security score</span>
+          <span className="section-title">Assessment coverage</span>
         </div>
-        <div className="card" style={{ display: 'flex', alignItems: 'center', gap: 24, padding: '20px 24px' }}>
-          <div className="score-card__gauge">
-            <SecurityGauge score={activeOverall.score} label="" size={120} />
-          </div>
-          <div>
+        <div className="card" style={{ padding: '16px 20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
               <OverallIcon size={18} color={activeOverall.color} />
               <span style={{ fontSize: 15, fontWeight: 600, color: activeOverall.color }}>
-                {activeOverall.status}
+                {hasScanned ? 'Partial assessment' : 'Not assessed'}
               </span>
             </div>
-            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-              Overall security posture based on the latest AI scan.
-            </div>
           </div>
+          <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 10px' }}>
+            {hasScanned
+              ? `${activeOverall.totalFindings ?? activeAlerts.length} finding(s) in ${activeOverall.filesScanned ?? 0} scanned file(s). Rule-based checks are limited and do not prove security.`
+              : 'Run a scan to see which checks were available. No overall security score is calculated.'}
+          </p>
+          {hasScanned && (
+            <div style={{ display: 'grid', gap: 5, fontSize: 12 }}>
+              {scanCoverage?.execution_mode === 'synchronous_fallback' && (
+                <div role="status">
+                  Scan queue unavailable; this repository was scanned synchronously without a background worker.
+                </div>
+              )}
+              <div>Source rules: {scanCoverage?.static_analysis?.status ?? 'unavailable'} (partial by design)</div>
+              {Object.entries(scanCoverage?.dependencies ?? {}).map(([ecosystem, status]) => (
+                <div key={ecosystem}>
+                  {ecosystem}: {status.replaceAll('_', ' ')}
+                </div>
+              ))}
+              <div>
+                Gemini advisory: {scanCoverage?.gemini?.status?.replaceAll('_', ' ') ?? 'not requested'}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       {/* ── Compliance ── */}
       <div className="card">
-        <div className="section-header" style={{ marginBottom: 0 }}>
-          <span className="card__title" style={{ margin: 0 }}>Compliance check results</span>
-          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-            {scanTime ? 'Just scanned' : 'Last scanned 5 min ago'}
-          </span>
-        </div>
-        <ComplianceTable scanData={scanCompliance} />
+        <span className="card__title">Compliance frameworks</span>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 0 }}>
+          CIS, SOC 2, ISO 27001, and PCI DSS compliance are not evaluated by this scanner.
+        </p>
       </div>
 
     </div>

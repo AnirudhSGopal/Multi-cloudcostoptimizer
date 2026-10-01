@@ -88,8 +88,15 @@ const useAuthStore = create((set) => ({
       const response = await apiClient.get('/api/v1/auth/me')
       set({ user: response.data.user, isAuthenticated: true })
     } catch (error) {
-      localStorage.removeItem('auth_token')
-      set({ user: null, token: null, isAuthenticated: false })
+      if (error.response?.status === 401) {
+        localStorage.removeItem('auth_token')
+        localStorage.removeItem('refresh_token')
+        set({ user: null, token: null, isAuthenticated: false })
+        return { success: false, error: 'Your session has expired. Please sign in again.' }
+      }
+      const message = 'Unable to verify your session. Check your connection and retry.'
+      set({ error: message })
+      return { success: false, error: message }
     }
   },
 }))

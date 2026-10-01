@@ -4,14 +4,15 @@ Coordinates the full scan pipeline:
   1. Clone repository
   2. Run static analysis
   3. Run dependency audit
-  4. Calculate security score
-  5. Persist all findings to PostgreSQL
+  4. Optionally request an advisory Gemini review
+  5. Persist findings and coverage to PostgreSQL
 """
 import logging
 import time
 from datetime import datetime, timezone
 
 from app.core.extensions import db
+from sqlalchemy import update
 from app.models.scan import (
     ScanJob, ScanResult, Vulnerability,
     ScanStatusEnum, SeverityEnum,
@@ -19,29 +20,9 @@ from app.models.scan import (
 from app.services.scanner.repo_cloner import cloned_repo, CloneError
 from app.services.scanner.static_analyzer import analyze_repository
 from app.services.scanner.dependency_auditor import audit_dependencies
+from app.services.scanner.gemini_source_review import review_repository
 
 logger = logging.getLogger(__name__)
-
-
-# ── Scoring constants ─────────────────────────────────────────────────────────
-# Score starts at 100 and is reduced by the weight of each finding.
-# Maximum deduction per severity bucket is capped to keep the scale fair.
-
-SEVERITY_DEDUCTIONS: dict[SeverityEnum, float] = {
-    SeverityEnum.CRITICAL: 20.0,
-    SeverityEnum.HIGH:     10.0,
-    SeverityEnum.MEDIUM:    5.0,
-    SeverityEnum.LOW:       2.0,
-    SeverityEnum.INFO:      0.0,
-}
-
-MAX_DEDUCTION_PER_BUCKET: dict[SeverityEnum, float] = {
-    SeverityEnum.CRITICAL: 60.0,
-    SeverityEnum.HIGH:     30.0,
-    SeverityEnum.MEDIUM:   20.0,
-    SeverityEnum.LOW:       5.0,
-    SeverityEnum.INFO:      0.0,
-}
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -52,12 +33,26 @@ def run_scan(job_id: int) -> None:
     Updates ScanJob.status throughout and writes ScanResult + Vulnerability rows.
     All exceptions are caught; job.status is set to FAILED on any error.
     """
-    job: ScanJob | None = ScanJob.query.get(job_id)
+    job: ScanJob | None = db.session.get(ScanJob, job_id)
     if job is None:
         logger.error("ScanJob %d not found — aborting.", job_id)
         return
 
-    _update_status(job, ScanStatusEnum.RUNNING)
+    claimed = db.session.execute(
+        update(ScanJob)
+        .where(
+            ScanJob.id == job.id,
+            ScanJob.status == ScanStatusEnum.PENDING,
+        )
+        .values(
+            status=ScanStatusEnum.RUNNING,
+            started_at=datetime.now(timezone.utc),
+        )
+    )
+    db.session.commit()
+    if claimed.rowcount != 1:
+        return
+    db.session.refresh(job)
     start_time = time.monotonic()
 
     try:
@@ -70,23 +65,50 @@ def run_scan(job_id: int) -> None:
                         job_id, len(static_findings), stats.files_scanned)
 
             # ── Phase 2: Dependency audit ─────────────────────────────────
-            dep_findings = audit_dependencies(repo_path)
-            logger.info("[Job %d] Dependencies: %d findings", job_id, len(dep_findings))
+            dependency_report = audit_dependencies(repo_path)
+            logger.info(
+                "[Job %d] Dependencies: %d findings",
+                job_id,
+                len(dependency_report.findings),
+            )
 
-            all_findings = static_findings + dep_findings
+            all_findings = static_findings + dependency_report.findings
+            coverage = {
+                "overall": "partial",
+                "static_analysis": {
+                    "status": "partial",
+                    "note": "Rule-based checks do not establish that a repository is secure.",
+                },
+                "dependencies": dependency_report.coverage,
+                "gemini": {
+                    "status": "not_requested",
+                    "type": "optional advisory review",
+                },
+            }
+            if job.gemini_review_requested:
+                advisory_findings, gemini_status = review_repository(
+                    repo_path,
+                    job.requested_by,
+                )
+                all_findings.extend(advisory_findings)
+                coverage["gemini"]["status"] = gemini_status
 
         # ── Phase 3: Persist ──────────────────────────────────────────────
         duration = time.monotonic() - start_time
-        _persist_results(job, all_findings, stats, duration)
+        _persist_results(job, all_findings, stats, duration, coverage)
         _update_status(job, ScanStatusEnum.COMPLETED)
         logger.info("[Job %d] Completed in %.1f s with %d findings.",
                     job_id, duration, len(all_findings))
 
     except CloneError as exc:
         _fail(job, str(exc))
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("[Job %d] Unexpected error: %s", job_id, exc)
-        _fail(job, f"Internal error: {exc}")
+    except Exception as exc:
+        logger.error(
+            "[Job %d] Unexpected scan error; exception_type=%s",
+            job_id,
+            type(exc).__name__,
+        )
+        _fail(job, "Internal scan error.")
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -96,6 +118,7 @@ def _persist_results(
     findings: list[dict],
     stats,
     duration: float,
+    coverage: dict,
 ) -> None:
     """Write Vulnerability rows and a ScanResult summary."""
     severity_counts: dict[SeverityEnum, int] = {s: 0 for s in SeverityEnum}
@@ -120,11 +143,10 @@ def _persist_results(
         db.session.add(vuln)
         severity_counts[f["severity"]] += 1
 
-    score = _calculate_score(severity_counts)
-
     result = ScanResult(
         job_id          = job.id,
-        security_score  = score,
+        security_score  = None,
+        coverage        = coverage,
         total_findings  = len(findings),
         critical_count  = severity_counts[SeverityEnum.CRITICAL],
         high_count      = severity_counts[SeverityEnum.HIGH],
@@ -137,16 +159,6 @@ def _persist_results(
     )
     db.session.add(result)
     db.session.commit()
-
-
-def _calculate_score(counts: dict[SeverityEnum, int]) -> float:
-    """Compute 0–100 security score from finding counts."""
-    deduction = 0.0
-    for severity, count in counts.items():
-        per_finding = SEVERITY_DEDUCTIONS[severity]
-        max_ded     = MAX_DEDUCTION_PER_BUCKET[severity]
-        deduction  += min(count * per_finding, max_ded)
-    return max(0.0, 100.0 - deduction)
 
 
 def _update_status(job: ScanJob, status: ScanStatusEnum) -> None:

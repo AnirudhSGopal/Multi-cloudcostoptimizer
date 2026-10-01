@@ -6,10 +6,13 @@ Credentials are stored as an encrypted JSON blob via Fernet.
 """
 import enum
 import json
+import logging
 from datetime import datetime, timezone
 
 from app.core.extensions import db
 from app.models.cloud import CloudProviderEnum
+
+logger = logging.getLogger(__name__)
 
 
 class AccountStatusEnum(str, enum.Enum):
@@ -88,14 +91,23 @@ class CloudAccount(db.Model):
                     safe_meta["subscription_id"] = creds.get("subscription_id") or creds.get("azure_subscription_id") or ""
                     safe_meta["tenant_id"] = creds.get("tenant_id") or creds.get("azure_tenant_id") or ""
                     safe_meta["client_id"] = creds.get("client_id") or creds.get("azure_client_id") or ""
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "Cloud account metadata unavailable; account_id=%s exception_type=%s",
+                self.id,
+                type(exc).__name__,
+            )
+
+        from config.settings import get_provider_storage_capacity
+        storage_cap = get_provider_storage_capacity(self.provider.value)
 
         return {
             "id":             self.id,
             "user_id":        self.user_id,
             "provider":       self.provider.value,
             "account_label":  self.account_label,
+            "storage_size":   storage_cap,
+            "storage_size_gb": storage_cap,
             "status":         self.status.value,
             "details":        safe_meta,
             "last_synced_at": self.last_synced_at.isoformat() if self.last_synced_at else None,

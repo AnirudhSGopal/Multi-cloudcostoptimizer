@@ -13,6 +13,7 @@ from typing import Generator
 
 from app.services.scanner.rules.secrets import SECRET_RULES
 from app.services.scanner.rules.code_patterns import CODE_RULES
+from app.services.scanner.rules.java_rules import JAVA_RULES
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +31,10 @@ SCANNABLE_EXTENSIONS: set[str] = {
     ".html", ".htm", ".jinja", ".jinja2",
     # Shell
     ".sh", ".bash", ".zsh",
-    # Ruby / PHP / Go / Java
-    ".rb", ".php", ".go", ".java", ".kt",
+    # Ruby / PHP / Go / Java / Kotlin / Groovy
+    ".rb", ".php", ".go", ".java", ".kt", ".groovy", ".gradle",
+    # Maven / Gradle / Spring config
+    ".xml", ".properties",
     # Docker / CI
     "Dockerfile", ".dockerignore",
 }
@@ -44,7 +47,7 @@ SKIP_DIRS: set[str] = {
 
 MAX_FILE_SIZE_BYTES: int = 1 * 1024 * 1024   # 1 MB — skip huge generated files
 
-ALL_RULES: list[dict] = SECRET_RULES + CODE_RULES
+ALL_RULES: list[dict] = SECRET_RULES + CODE_RULES + JAVA_RULES
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -88,19 +91,25 @@ def analyze_repository(repo_path: str) -> tuple[list[dict], AnalysisStats]:
 
 def _walk_files(base_path: str) -> Generator[Path, None, None]:
     """Yield every scannable file under *base_path*."""
-    base = Path(base_path)
+    base = Path(base_path).resolve()
     for root, dirs, files in os.walk(base):
-        # Prune skip directories in-place
+        root_path = Path(root)
         dirs[:] = [
             d for d in dirs
-            if d not in SKIP_DIRS and not d.startswith(".")
+            if d not in SKIP_DIRS
+            and not d.startswith(".")
+            and not (root_path / d).is_symlink()
         ]
         for filename in files:
-            file_path = Path(root) / filename
+            file_path = root_path / filename
+            if file_path.is_symlink():
+                continue
             suffix    = file_path.suffix.lower()
             name      = file_path.name
 
             if suffix not in SCANNABLE_EXTENSIONS and name not in SCANNABLE_EXTENSIONS:
+                continue
+            if not file_path.resolve().is_relative_to(base):
                 continue
             if file_path.stat().st_size > MAX_FILE_SIZE_BYTES:
                 logger.debug("Skipping large file: %s", file_path)
@@ -116,7 +125,7 @@ def _scan_file(file_path: Path, repo_root: str) -> tuple[list[dict], int]:
     """
     content = file_path.read_text(encoding="utf-8", errors="replace")
     lines   = content.splitlines()
-    rel_path = str(file_path.relative_to(repo_root))
+    rel_path = str(file_path.relative_to(Path(repo_root).resolve()))
 
     findings: list[dict] = []
 

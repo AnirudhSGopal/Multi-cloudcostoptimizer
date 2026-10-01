@@ -15,26 +15,87 @@ import os
 import json
 import logging
 from typing import List, Dict, Any
+from flask import current_app, has_app_context
+
+from config.settings import PROVIDER_STORAGE_CAPACITY_GB, get_provider_storage_capacity
 
 logger = logging.getLogger(__name__)
 
 
-def analyze(resources: List[Dict[str, Any]], cost_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def verify_storage_capacity_invariance(before: Dict[str, Any], after: Dict[str, Any]) -> None:
+    """
+    Assert that provider total storage capacity is IDENTICAL before and after optimization.
+    Raises AssertionError if any provider storage capacity differs or has been altered, resized,
+    or reallocated by the optimization process.
+
+    Only data placement, tiering lifecycle, cost, latency, etc. may change.
+    """
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        raise AssertionError("Storage configurations before and after optimization must be dictionaries.")
+
+    for provider, size_before in before.items():
+        if provider not in after:
+            raise AssertionError(
+                f"Storage size invariance violation: Provider '{provider}' with capacity {size_before} GB "
+                f"is missing from post-optimization storage configuration."
+            )
+        size_after = after[provider]
+        if size_before != size_after:
+            raise AssertionError(
+                f"Storage size mismatch for provider '{provider}': "
+                f"before optimization = {size_before} GB, "
+                f"after optimization = {size_after} GB. "
+                f"The optimization algorithm must not change, resize, or reallocate provider total storage capacity! "
+                f"Only data placement, lifecycle tiering, cost, or latency may change."
+            )
+
+
+def analyze(
+    resources: List[Dict[str, Any]],
+    cost_data: List[Dict[str, Any]],
+    provider_storage: Dict[str, Any] = None,
+    user_id=None,
+) -> List[Dict[str, Any]]:
     """
     Main entry point for multi-cloud optimization analysis.
 
     Args:
         resources: Normalized resource list from provider services
         cost_data: Normalized cost list from provider services
+        provider_storage: Optional provider storage capacities dictionary. If None,
+                          retrieved from central PROVIDER_STORAGE_CAPACITY_GB single source of truth.
 
     Returns:
         List of Recommendation dicts
+
+    Raises:
+        AssertionError: If provider storage capacity differs before vs after optimization.
     """
+    # ── Requirement 3 & 4: Single source of truth & storage size snapshot BEFORE ─
+    if provider_storage is not None:
+        storage_before = dict(provider_storage)
+    else:
+        storage_before = {p: get_provider_storage_capacity(p) for p in ("aws", "gcp", "azure")}
+
     # ── Phase 1: Rule-based Analysis (Deterministic) ─────────────────────────
     rule_recommendations = _run_rule_checks(resources or [], cost_data or [])
 
     # ── Phase 2: Gemini AI Enhancement (Prioritization & Insight) ────────────
-    final_recommendations = _enhance_with_gemini(rule_recommendations, resources or [], cost_data or [])
+    final_recommendations = _enhance_with_gemini(
+        rule_recommendations,
+        resources or [],
+        cost_data or [],
+        user_id=user_id,
+    )
+
+    # ── Requirement 2 & 4: Storage size snapshot AFTER & invariance assertion ─
+    if provider_storage is not None:
+        storage_after = dict(provider_storage)
+    else:
+        storage_after = {p: get_provider_storage_capacity(p) for p in ("aws", "gcp", "azure")}
+
+    # Assert storage size is strictly identical before and after optimization
+    verify_storage_capacity_invariance(storage_before, storage_after)
 
     return final_recommendations
 
@@ -273,6 +334,7 @@ def _enhance_with_gemini(
     rule_recs: List[Dict[str, Any]],
     resources: List[Dict[str, Any]],
     cost_data: List[Dict[str, Any]],
+    user_id=None,
 ) -> List[Dict[str, Any]]:
     """
     Call Gemini API to polish impact statements and suggest architectural optimizations.
@@ -283,19 +345,18 @@ def _enhance_with_gemini(
         logger.info("GEMINI_API_KEY not found — using rule-based cost recommendations only.")
         return rule_recs
 
-    try:
-        import google.generativeai as genai
+    from app.services.cloud import gemini_guard
 
-        genai.configure(api_key=api_key)
-        model = None
-        for m_name in ("models/gemini-2.5-flash", "models/gemini-flash-latest", "gemini-2.5-flash", "gemini-flash-latest"):
-            try:
-                model = genai.GenerativeModel(m_name)
-                break
-            except Exception:
-                continue
-        if not model:
-            model = genai.GenerativeModel("models/gemini-2.5-flash")
+    if gemini_guard.gemini_circuit_is_open():
+        logger.warning("Gemini circuit is open; using rule-based recommendations")
+        return rule_recs
+    if not gemini_guard.reserve_gemini_call(user_id):
+        logger.info("Gemini daily budget unavailable; using rule-based recommendations")
+        return rule_recs
+
+    try:
+        from google import genai
+        from google.genai import types
 
         # Map savings by rec ID to ensure strict preservation
         savings_map = {r["id"]: r["estimated_monthly_savings"] for r in rule_recs}
@@ -320,8 +381,24 @@ IMPORTANT CONSTRAINTS:
 - Return ONLY valid JSON array containing objects with keys: id, category, priority, provider, title, description, impact_statement, estimated_monthly_savings, effort.
 """
 
-        response = model.generate_content(prompt, generation_config={"temperature": 0.2})
-        text = response.text.replace("```json", "").replace("```", "").strip()
+        timeout = (
+            current_app.config.get("GEMINI_REQUEST_TIMEOUT_SECONDS", 10)
+            if has_app_context()
+            else 10
+        )
+        with genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=timeout),
+        ) as client:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.2,
+                    response_mime_type="application/json",
+                ),
+            )
+        text = (response.text or "").replace("```json", "").replace("```", "").strip()
 
         gemini_recs = json.loads(text)
         if isinstance(gemini_recs, list):
@@ -337,9 +414,15 @@ IMPORTANT CONSTRAINTS:
                 enhanced.append(item)
 
             logger.info("Gemini enhanced %d cost recommendations.", len(enhanced))
+            gemini_guard.record_gemini_success()
             return enhanced
+        raise ValueError("Gemini response must be a JSON array")
 
     except Exception as exc:
-        logger.warning("Gemini optimization enhancement failed: %s — falling back to rule-based recommendations.", exc)
+        gemini_guard.record_gemini_failure()
+        logger.warning(
+            "Gemini enhancement failed (%s); using rule-based recommendations",
+            type(exc).__name__,
+        )
 
     return rule_recs

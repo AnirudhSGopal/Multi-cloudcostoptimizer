@@ -1,0 +1,91 @@
+services:
+  backend:
+    image: ${BACKEND_IMAGE:?Set BACKEND_IMAGE to a versioned backend image}
+    environment:
+      FLASK_ENV: production
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set ENCRYPTION_KEY}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL to Supabase Postgres}
+      CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS}
+      REDIS_URL: redis://redis:6379/0
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-2}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-1}
+      DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-30}
+      CELERY_TASK_SOFT_TIME_LIMIT: ${CELERY_TASK_SOFT_TIME_LIMIT:-240}
+      CELERY_TASK_TIME_LIMIT: ${CELERY_TASK_TIME_LIMIT:-300}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_DAILY_USER_QUOTA: ${GEMINI_DAILY_USER_QUOTA:-25}
+      GEMINI_DAILY_GLOBAL_CAP: ${GEMINI_DAILY_GLOBAL_CAP:-500}
+      GEMINI_REQUEST_TIMEOUT_SECONDS: ${GEMINI_REQUEST_TIMEOUT_SECONDS:-10}
+      GEMINI_CIRCUIT_BREAKER_FAILURES: ${GEMINI_CIRCUIT_BREAKER_FAILURES:-3}
+      GEMINI_CIRCUIT_BREAKER_RESET_SECONDS: ${GEMINI_CIRCUIT_BREAKER_RESET_SECONDS:-300}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      MAX_REPO_SIZE_MB: ${MAX_REPO_SIZE_MB:-500}
+      CLONE_BASE_DIR: ${CLONE_BASE_DIR:-/tmp/securevault_repos}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
+    ports:
+      - "${HOST_PORT:-5000}:5000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  celery:
+    image: ${BACKEND_IMAGE:?Set BACKEND_IMAGE to a versioned backend image}
+    command: ["celery", "-A", "wsgi.celery", "worker", "--loglevel=INFO"]
+    environment:
+      FLASK_ENV: production
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set ENCRYPTION_KEY}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL to Supabase Postgres}
+      CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS}
+      REDIS_URL: redis://redis:6379/0
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-2}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-1}
+      DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-30}
+      CELERY_TASK_SOFT_TIME_LIMIT: ${CELERY_TASK_SOFT_TIME_LIMIT:-240}
+      CELERY_TASK_TIME_LIMIT: ${CELERY_TASK_TIME_LIMIT:-300}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_DAILY_USER_QUOTA: ${GEMINI_DAILY_USER_QUOTA:-25}
+      GEMINI_DAILY_GLOBAL_CAP: ${GEMINI_DAILY_GLOBAL_CAP:-500}
+      GEMINI_REQUEST_TIMEOUT_SECONDS: ${GEMINI_REQUEST_TIMEOUT_SECONDS:-10}
+      GEMINI_CIRCUIT_BREAKER_FAILURES: ${GEMINI_CIRCUIT_BREAKER_FAILURES:-3}
+      GEMINI_CIRCUIT_BREAKER_RESET_SECONDS: ${GEMINI_CIRCUIT_BREAKER_RESET_SECONDS:-300}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      MAX_REPO_SIZE_MB: ${MAX_REPO_SIZE_MB:-500}
+      CLONE_BASE_DIR: ${CLONE_BASE_DIR:-/tmp/securevault_repos}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  redis:
+    image: redis:7.4.2-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  redis_data:

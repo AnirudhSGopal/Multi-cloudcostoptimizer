@@ -32,24 +32,14 @@ function ProviderSection({ providerKey, name, color, fields }) {
   const { accounts, testConnection, addCloudAccount, deleteCloudAccount } = useCloudStore()
   const existingAccount = accounts.find(a => a.provider === providerKey)
 
-  const [values, setValues] = useState(() => Object.fromEntries(fields.map(f => [f.key, ''])))
+  const [editedValues, setEditedValues] = useState({})
+  const storedValues = Object.fromEntries(
+    fields.map(f => [f.key, existingAccount?.details?.[f.key] ?? ''])
+  )
+  const values = { ...storedValues, ...editedValues }
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [deleting, setDeleting] = useState(false)
-
-  useEffect(() => {
-    if (existingAccount?.details) {
-      setValues(prev => {
-        const next = { ...prev }
-        fields.forEach(f => {
-          if (existingAccount.details[f.key] !== undefined) {
-            next[f.key] = existingAccount.details[f.key]
-          }
-        })
-        return next
-      })
-    }
-  }, [existingAccount])
 
   const handleSave = async () => {
     // Basic validation — if existing account is already connected and user updates a field, required checks account for saved keys
@@ -101,7 +91,7 @@ function ProviderSection({ providerKey, name, color, fields }) {
 
     if (result.success) {
       toast.success(`${name} account disconnected.`)
-      setValues(Object.fromEntries(fields.map(f => [f.key, ''])))
+      setEditedValues({})
     } else {
       toast.error(result.error || `Failed to remove ${name} account`)
     }
@@ -148,7 +138,7 @@ function ProviderSection({ providerKey, name, color, fields }) {
             placeholder={f.placeholder}
             type={f.type || 'password'}
             value={values[f.key]}
-            onChange={val => setValues(prev => ({ ...prev, [f.key]: val }))}
+            onChange={val => setEditedValues(prev => ({ ...prev, [f.key]: val }))}
           />
         ))}
       </div>
@@ -191,8 +181,8 @@ const PROVIDERS = [
 ]
 
 export default function Settings() {
-  const { fetchAccounts, accounts, syncAllAccounts } = useCloudStore()
-  const [aiUrl, setAiUrl] = useState(import.meta.env.VITE_AI_SERVICE_URL || 'http://localhost:5000')
+  const { fetchAccounts, accounts, accountsLoading, accountsError, syncAllAccounts } = useCloudStore()
+  const [aiUrl, setAiUrl] = useState(import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000')
 
   useEffect(() => {
     fetchAccounts()
@@ -210,6 +200,14 @@ export default function Settings() {
       <div className="settings-layout">
         <div>
           <div className="settings-section-title">Cloud Provider Credentials</div>
+          {accountsLoading && (
+            <p role="status" aria-live="polite" style={{ color: 'var(--text-muted)' }}>
+              Loading connected accounts…
+            </p>
+          )}
+          {accountsError && (
+            <p role="alert" style={{ color: 'var(--red)' }}>{accountsError}</p>
+          )}
           <div className="settings-providers">
             {PROVIDERS.map(p => <ProviderSection key={p.providerKey} {...p} />)}
           </div>
