@@ -216,7 +216,7 @@ def add_cloud_account():
 @cloud_bp.get("/accounts/<int:account_id>")
 @cloud_bp.get("/<int:account_id>")
 @jwt_required()
-@limiter.limit("10 per hour")
+@limiter.limit("120 per minute")
 @active_user_required
 def get_cloud_account(account_id: int):
     """

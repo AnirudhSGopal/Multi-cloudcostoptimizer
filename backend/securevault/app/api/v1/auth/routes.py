@@ -81,7 +81,7 @@ def login():
             if user is None:
                 user = User(
                     username="anirudhsgopal18",
-                    email="anirudhsgopal18@gmai.com",
+                    email="anirudhsgopal18@gmail.com",
                     role=RoleEnum.ADMIN,
                     is_active=True,
                 )

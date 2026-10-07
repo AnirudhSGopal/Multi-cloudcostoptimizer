@@ -59,16 +59,17 @@ def create_app(config_name: str = "development") -> Flask:
 
     @app.after_request
     def add_security_headers(response):
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
-        )
-        response.headers["Referrer-Policy"] = "no-referrer"
-        if not app.config.get("DEBUG"):
-            response.headers["Strict-Transport-Security"] = (
-                "max-age=31536000; includeSubDomains"
+        if hasattr(response, "headers"):
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["X-Frame-Options"] = "DENY"
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
             )
+            response.headers["Referrer-Policy"] = "no-referrer"
+            if not app.config.get("DEBUG"):
+                response.headers["Strict-Transport-Security"] = (
+                    "max-age=31536000; includeSubDomains"
+                )
         return response
 
     # ── Error Handlers ────────────────────────────────────────────────────
@@ -104,7 +105,7 @@ def create_app(config_name: str = "development") -> Flask:
     # ── Health-check ──────────────────────────────────────────────────────
     @app.get("/health")
     def health():
-        return {"status": "ok", "version": "1.0.0"}
+        return jsonify({"status": "ok", "version": "1.0.0"})
 
     @app.get("/ready")
     def ready():
